@@ -20,10 +20,11 @@ def evaluate_answer(question, ground_truth_answer, predicted_answer, token_monit
     Returns:
         bool: True if the answer is correct, False otherwise
     """
+    agent_answer = predicted_answer if predicted_answer is not None else ""
     prompt = prompt_agent_verify_answer_referencing.format(
         question=question,
         ground_truth_answer=ground_truth_answer,
-        agent_answer=predicted_answer
+        agent_answer=agent_answer
     )
     
     try:

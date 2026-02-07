@@ -11,7 +11,6 @@ Saves results to:
 Prints token usage summary per variant and comparison.
 """
 
-import argparse
 import json
 import pickle
 from pathlib import Path
@@ -19,6 +18,7 @@ from pathlib import Path
 from reason_ablation import reason_original, reason_no_rewatch, reason_no_highlevel
 from reason_full import evaluate_answer, load_questions
 from utils.token_monitor import TokenMonitor
+
 
 def get_available_videos(semantic_memory_dir: str = "data/semantic_memory") -> list:
     """Return list of video names that have .pkl files in semantic memory."""
@@ -39,7 +39,7 @@ def run_ablation(
     Returns dict with results and token summaries per variant.
     """
     if available_videos is None:
-        available_videos = DEFAULT_VIDEOS
+        available_videos = get_available_videos(semantic_memory_dir)
 
     semantic_path = Path(semantic_memory_dir)
     questions_data = load_questions(questions_path)
@@ -117,7 +117,8 @@ def run_ablation(
                 reason_result["before_clip"] = before_clip
 
                 results[question_id] = reason_result
-                print(f"  Predicted: {predicted[:60]}...")
+                pred_display = (predicted[:60] + "...") if len(str(predicted)) > 60 else predicted
+                print(f"  Predicted: {pred_display}")
                 print(f"  Correct: {is_correct}")
 
             except Exception as e:
@@ -187,12 +188,4 @@ def run_ablation(
 
 
 if __name__ == "__main__":
-
-    # videos = get_available_videos()
-    videos = ["living_room_03"]
-
-    run_ablation(
-        output_dir="data/results",
-        semantic_memory_dir="data/semantic_memory",
-        available_videos=videos,
-    )
+    run_ablation()
