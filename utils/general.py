@@ -21,13 +21,17 @@ class Tee:
         self.file.flush()
         self.stdout.flush()
 
-def strip_code_fences(text: str) -> str:
+def strip_code_fences(text) -> str:
     """
     Remove surrounding Markdown code fences (``` or ```json) from a string.
     Preserves inner content exactly.
     """
     if text is None:
         return ""
+    if isinstance(text, tuple):
+        text = text[0] if text else ""
+    if not isinstance(text, str):
+        return str(text)
 
     stripped = text.strip()
     if stripped.startswith("```"):

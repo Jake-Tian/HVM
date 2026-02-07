@@ -17,10 +17,18 @@ def get_response(messages, token_monitor: Optional[TokenMonitor] = None):
     )
     content = response.choices[0].message.content
     if token_monitor is not None and response.usage:
+        usage = response.usage
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        if prompt_tokens is None:
+            prompt_tokens = getattr(usage, "input_tokens", 0)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        if completion_tokens is None:
+            completion_tokens = getattr(usage, "output_tokens", 0)
+        total_tokens = getattr(usage, "total_tokens", None)
         token_monitor.add_vision_usage(
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+            total_tokens=total_tokens,
         )
     return content
 

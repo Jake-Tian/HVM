@@ -27,19 +27,24 @@ def parse_semantic_response(response):
     action_match = re.search(r'Action:\s*\[(Answer|Search)\]', response, re.IGNORECASE)
     content_match = re.search(r'Content:\s*(.+?)(?:\n|Summary:|$)', response, re.DOTALL | re.IGNORECASE)
     summary_match = re.search(r'Summary:\s*(.+?)$', response, re.DOTALL | re.IGNORECASE)
-    
-    if not action_match or not content_match:
-        raise ValueError(f"Could not parse semantic response. Response: {response}")
-    
-    action = action_match.group(1).strip()
-    content = content_match.group(1).strip()
-    summary = summary_match.group(1).strip() if summary_match else None
-    
-    return {
-        'action': action,
-        'content': content,
-        'summary': summary
-    }
+
+    if action_match and content_match:
+        action = action_match.group(1).strip()
+        content = content_match.group(1).strip()
+        summary = summary_match.group(1).strip() if summary_match else None
+        return {'action': action, 'content': content, 'summary': summary}
+
+    # Fallback: LLM sometimes returns simplified "[Answer] <content>" or "[Search] <content>"
+    fallback_answer = re.search(r'\[Answer\]\s*(.+)', response, re.DOTALL | re.IGNORECASE)
+    fallback_search = re.search(r'\[Search\]\s*(.+)', response, re.DOTALL | re.IGNORECASE)
+    if fallback_answer:
+        content = fallback_answer.group(1).strip()
+        return {'action': 'Answer', 'content': content, 'summary': None}
+    if fallback_search:
+        content = fallback_search.group(1).strip()
+        return {'action': 'Search', 'content': content, 'summary': None}
+
+    raise ValueError(f"Could not parse semantic response. Response: {response}")
 
 
 def parse_video_response(response):

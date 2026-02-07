@@ -121,7 +121,7 @@ for variant_name, reason_fn in variants:
 
         try:
             reason_result = reason_fn(question, graph, video_name, token_monitor=token_monitor)
-            predicted = reason_result.get("final_answer", "")
+            predicted = reason_result.get("final_answer") or reason_result.get("answer") or ""
             is_correct = evaluate_answer(question, ground_truth, predicted, token_monitor=token_monitor)
 
             reason_result["evaluator_correct"] = is_correct

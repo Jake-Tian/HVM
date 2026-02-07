@@ -14,7 +14,7 @@ from utils.llm import generate_text_response
 from utils.prompts import (
     prompt_parse_query,
     prompt_semantic_video,
-    prompt_semantic_video_no_rewatch,
+    prompt_semantic_answer_only,
     prompt_semantic_video_no_highlevel,
 )
 from utils.search import search_with_parse
@@ -22,17 +22,27 @@ from utils.reasoning import parse_semantic_response, extract_clip_ids, watch_vid
 from utils.token_monitor import TokenMonitor
 
 
-def _evaluate_semantic_answer(question, graph_search_results, prompt, token_monitor: Optional[TokenMonitor] = None):
+def _evaluate_semantic_answer(
+    question,
+    graph_search_results,
+    prompt,
+    token_monitor: Optional[TokenMonitor] = None,
+    answer_only: bool = False,
+):
     """Evaluate whether graph search results are sufficient to answer the question."""
     full_prompt = prompt + "\n\nExtracted knowledge from graph:\n" + graph_search_results + "\n\nQuestion: " + question
     try:
         semantic_response = generate_text_response(full_prompt, token_monitor=token_monitor)
     except Exception as e:
         raise Exception(f"Error generating semantic answer: {e}")
-    try:
-        parsed = parse_semantic_response(semantic_response)
-    except Exception as e:
-        raise Exception(f"Error parsing semantic response: {e}\nResponse: {semantic_response}")
+    if answer_only:
+        # prompt_semantic_answer_only returns a direct answer string
+        parsed = {"action": "Answer", "content": semantic_response.strip(), "summary": None}
+    else:
+        try:
+            parsed = parse_semantic_response(semantic_response)
+        except Exception as e:
+            raise Exception(f"Error parsing semantic response: {e}\nResponse: {semantic_response}")
     return {"semantic_video_output": semantic_response, "parsed_response": parsed}
 
 
@@ -48,13 +58,14 @@ def reason_original(question, graph, video_name, token_monitor: Optional[TokenMo
 
 
 def reason_no_rewatch(question, graph, video_name, token_monitor: Optional[TokenMonitor] = None):
-    """Ablation: no video re-watch. Answer from graph only."""
+    """Ablation: no video re-watch. Answer from graph only using prompt_semantic_answer_only."""
     return _reason(
         question, graph, video_name,
         token_monitor=token_monitor,
         skip_high_level=False,
         allow_video_rewatch=False,
-        semantic_prompt=prompt_semantic_video_no_rewatch,
+        semantic_prompt=prompt_semantic_answer_only,
+        answer_only=True,
     )
 
 
@@ -78,6 +89,7 @@ def _reason(
     skip_high_level: bool = False,
     allow_video_rewatch: bool = True,
     semantic_prompt: str,
+    answer_only: bool = False,
 ):
     """
     Core reasoning logic with configurable ablation options.
@@ -110,6 +122,7 @@ def _reason(
             question, result["graph_search_results"],
             prompt=semantic_prompt,
             token_monitor=token_monitor,
+            answer_only=answer_only,
         )
         result["semantic_video_output"] = semantic_result["semantic_video_output"]
         parsed = semantic_result["parsed_response"]

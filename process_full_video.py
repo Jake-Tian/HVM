@@ -79,7 +79,9 @@ def process_full_video(frames_dir, output_graph_path=None, output_episodic_memor
             except Exception as e:
                 print(f"LLM call failed, retrying... Error: {e}")
                 response = get_response(messages)
-            # print(response)
+            # Unpack if get_response returns (content, usage) for token tracking
+            if isinstance(response, tuple):
+                response = response[0]
             response = strip_code_fences(response)
             response_dict = json.loads(response)
 

@@ -626,31 +626,6 @@ Summary: The graph shows the air-conditioning remote being used at clip 8 and cl
 """
 
 
-# Ablation: no video re-watch - must answer from graph only (no [Search] allowed)
-prompt_semantic_video_no_rewatch = """
-You are a reasoning system that evaluates information extracted from a knowledge graph to answer a question.
-
-**CRITICAL CONSTRAINT**: You can ONLY use the graph information provided. You CANNOT request video clips. Video re-watching is disabled. You MUST answer from the graph alone.
-
-If the graph information is sufficient to answer the question, provide [Answer] with the best answer you can infer.
-If the graph information is insufficient or ambiguous, you MUST still output [Answer] with one of:
-- "Unknown" or "Cannot determine from graph." when no relevant information exists
-- Your best inference from the available information when partial information exists (include uncertainty if appropriate)
-
-**You must NEVER output [Search].** Always output [Answer].
-
-Input format (same as standard):
-- **Parentheses (X)**: Confidence scores in high-level information
-- **Square brackets [X]**: Clip IDs for temporal reference
-
-Output format:
-Action: [Answer]
-Content: <your answer here - must be from graph only, or "Unknown"/"Cannot determine from graph." if insufficient>
-
-Now evaluate the following:
-"""
-
-
 # Ablation: no high-level - graph search excludes character attributes/relationships
 prompt_semantic_video_no_highlevel = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
@@ -662,16 +637,94 @@ You are a reasoning system that evaluates whether information extracted from a k
 Character attributes (e.g., "Anna is health-conscious") and relationships (e.g., "Anna competes with Susan") are NOT available in this ablation setting. Answer or request video based on low-level actions and conversations only.
 
 Input format:
-- **Square brackets [X]**: Clip IDs. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, etc.
+- **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
+  Applies to both low-level actions and conversation messages.
+  Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
 
-**Decision criteria** (same as standard):
-1. Answer directly ([Answer]) when the available information provides a clear answer.
-2. Search video memory ([Search]) when the information is insufficient and video clips may help.
+**Decision criteria**:
+1. Answer directly ([Answer]) when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose [Answer].
+2. Search video memory ([Search]) when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
 
 Output format:
 Action: [Answer] or [Search]
-Content: <your answer> or [clip_id1, clip_id2, ...]
-Summary: <only when Action is [Search] - summary of extracted information>
+Content: <your answer here> or [clip_id1, clip_id2, ...]
+Summary: <only present when Action is [Search] - summary of extracted information from the graph>
+
+If the action is [Search]:
+- **Content**: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
+- **Summary**: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
+
+If the action is [Answer]:
+- **Content**: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
+- Do not include a Summary field.
+
+Special types of questions:
+1. Spatial/Location questions (questions asking "where" or "which place"):
+  - Only choose [Answer] if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
+  - If the location information is generic (e.g., "kitchen", "office", "living room"), choose [Search].
+  - If the action is [Search]:
+    - Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...].
+    - Include the clips where the actions occured, and the clips before and after the actions if neccessary.
+    - Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences.
+
+2. Temporal Sequence questions (questions asking about event order, sequence, "first", "before", "after", "should X be done first", "what happened before/after X", etc.):
+  - Only choose [Answer] if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
+  - If the temporal sequence is unclear, ambiguous, or missing key events, choose [Search].
+  - **Distinguish**: "Should X be done first?" asks about INSTRUCTIONS/intended order, while "What happened before/after X?" asks about ACTUAL sequence.
+  - If the action is [Search]:
+    - **Clip selection priority**: Focus on clips BEFORE or AFTER the key action/event based on the temporal context of the question. If information is insufficient, prioritize clips that occur BEFORE the key action.
+    - **Summary format**: MUST clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." Use this format for each relevant event in chronological order.
+    - Focus the summary on events in chronological order with explicit clip IDs, character actions and their sequence, and what happened before/after the key action.
+
+3. Counting questions (questions asking "how many", "how many times", "how many pieces", "how many kinds", etc.):
+  - Only choose [Answer] if the graph provides explicit counts or if all occurrences can be clearly enumerated from the graph information.
+  - If counts are vague, incomplete, or if multiple occurrences might be missed, choose [Search].
+  - If the action is [Search]:
+    - **Clip selection**: Include ALL clips where the mentioned event takes place. Also include clip IDs between two mentioned events if necessary to ensure no counting is missed during the information storage step.
+    - **Summary format**: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [character/event] [action] [count]." Example: "In clip 18, A did something once; in clip 20, A did something twice."
+    - Focus the summary on enumerating each occurrence with its clip ID and count, ensuring all events are accounted for.
+
+Examples:
+
+Question: What did Anna decide to drink before the game?
+Extracted information: High-level: (not available) Low-level: [15] Anna picks up Anna's water bottle. [16] Susan picks up Susan's sports drink. Conversations: Anna says "I just want a bottle of water. That's fine. No sports soda for me." Susan responds "you never drink sports soda, and just mineral water."
+Output:
+Action: [Answer]
+Content: Anna decided to drink water before the game.
+
+Question: What happened after Alice received the gift?
+Extracted information: High-level: (not available) Low-level: [15] Bob gives Alice wrapped gift box. [16] Alice unwraps gift box. [17] Alice reads book. Conversations: (no relevant conversations)
+Output:
+Action: [Answer]
+Content: After receiving the gift, Alice unwrapped it and then read the book.
+
+Question: What is the relationship between Anna and Susan?
+Extracted information: High-level: (not available) Low-level: [12] Anna challenges Susan to a game. [15] Anna and Susan prepare for competition. Conversations: Anna and Susan discuss their upcoming game, with Anna expressing confidence in winning.
+Output:
+Action: [Search]
+Content: [12, 15, 14, 16]
+Summary: The graph shows low-level actions but does not contain character relationships (high-level excluded). The relationship between Anna and Susan cannot be inferred from actions and conversations alone. Clips 12 and 15 show competitive preparation; additional clips may reveal their relationship dynamics.
+
+Question: Where is the book Lucky read just now?
+Extracted information: High-level: (not available) Low-level: [8] Lucky reads book. (bedroom) [9] Lucky places book. (bedroom) Conversations: (no relevant conversations)
+Output:
+Action: [Search]
+Content: [8, 9, 7]
+Summary: The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames.
+
+Question: Should the balloons be put up first?
+Extracted information: High-level: (not available) Low-level: [10] Betty instructs to put up balloons. (living room) [12] Betty and Linda write message on balloons. (living room) [14] Betty and Linda put up balloons. (living room) Conversations: (no relevant conversations)
+Output:
+Action: [Search]
+Content: [10, 12, 14, 11, 13]
+Summary: The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order.
+
+Question: How many times was the air-conditioning remote used?
+Extracted information: High-level: (not available) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
+Output:
+Action: [Search]
+Content: [8, 11, 9, 10]
+Summary: The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step.
 
 Now evaluate the following:
 """

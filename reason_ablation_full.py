@@ -41,6 +41,10 @@ def run_ablation(
     if available_videos is None:
         available_videos = get_available_videos(semantic_memory_dir)
 
+    if not available_videos:
+        print("No videos found in semantic memory. Ensure data/semantic_memory has .pkl files.")
+        return {}, {}
+
     semantic_path = Path(semantic_memory_dir)
     questions_data = load_questions(questions_path)
     out_path = Path(output_dir)
@@ -105,7 +109,7 @@ def run_ablation(
                     graph = pickle.load(f)
 
                 reason_result = reason_fn(question, graph, video_name, token_monitor=token_monitor)
-                predicted = reason_result.get("final_answer", reason_result.get("answer", ""))
+                predicted = reason_result.get("final_answer") or reason_result.get("answer") or ""
 
                 is_correct = evaluate_answer(question, ground_truth, predicted, token_monitor=token_monitor)
 
