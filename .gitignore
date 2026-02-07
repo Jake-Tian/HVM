@@ -7,6 +7,9 @@ __pycache__/
 
 # Data file
 data/
+
+# Visualization output
+visualization/
 *.mp4
 *.pkl
 

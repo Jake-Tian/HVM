@@ -310,20 +310,20 @@ def main():
         for video_name in video_names:
             video_path = videos_dir / f"{video_name}.mp4"
             srt_path = subtitles_dir / f"{video_name}.srt"
-            
+        
             if not video_path.exists():
                 print(f"✗ Video file not found: {video_path}")
                 continue
-            
+        
             if not srt_path.exists():
                 print(f"✗ Subtitle file not found: {srt_path}")
                 continue
                 
             videos_to_process.append((video_name, video_path, srt_path))
         
-        if not videos_to_process:
-            print("No valid videos to process.")
-            return
+            if not videos_to_process:
+                print("No valid videos to process.")
+                return
         
         # Process each video
         for video_name, video_path, srt_path in videos_to_process:

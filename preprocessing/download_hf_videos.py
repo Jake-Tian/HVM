@@ -7,12 +7,7 @@ Usage: python download_hf_videos.py bedroom_01 bedroom_02 ...
 import sys
 import requests
 from pathlib import Path
-
-try:
-    from tqdm import tqdm
-    HAS_TQDM = True
-except ImportError:
-    HAS_TQDM = False
+from tqdm import tqdm
 
 # Configuration
 BASE_URL = "https://huggingface.co/datasets/ByteDance-Seed/M3-Bench/resolve/main/videos/robot"
@@ -58,17 +53,11 @@ def download_video(video_name):
         
         # Download and save with progress bar
         with open(local_file, 'wb') as f:
-            if total_size == 0 or not HAS_TQDM:
-                # No content length header or tqdm not available, download without progress bar
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc=video_name, disable=(total_size == 0)) as pbar:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            else:
-                # Download with progress bar
-                with tqdm(total=total_size, unit='B', unit_scale=True, desc=video_name) as pbar:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                        if total_size > 0:
                             pbar.update(len(chunk))
         
         print(f"✓ Successfully downloaded {video_name} to {local_file}")

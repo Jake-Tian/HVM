@@ -184,7 +184,7 @@ class HeteroGraph:
         self.objects[name] = obj_node
         
         return (name, name)
-
+    
 
     # --------------------------------------------------------
     # Conversation API
@@ -325,7 +325,7 @@ class HeteroGraph:
             self.adjacency_list_in[None].append(edge.id)
 
         return edge.id
-    
+
     def add_high_level_edge(self, edge):
         """
         Add a high-level edge (clip_id=0) with duplicate checking.
@@ -1277,7 +1277,7 @@ class HeteroGraph:
         # Return the maximum of normal and reversed directions plus content similarity
         return content_sim + max(normal_q_source_sim + normal_q_target_sim, reversed_q_source_sim + reversed_q_target_sim)
 
-
+    
     def search_high_level_edges(self, query_triples, k):
         """
         Search for top-k high-level edges (clip_id=0, scene=None) using embedding-based similarity.

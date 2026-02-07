@@ -432,8 +432,8 @@ Given a query and budget `k=50`, output:
 ```json
 {
   "query_triples": [["<Anna>", "relationship", "<Susan>", 0.95, 0.2, 0.95]],
-  "spatial_constraint": null,
-  "speaker_strict": null,
+  "spatial_constraint": null, 
+  "speaker_strict": null, 
   "allocation": {"k_high_level": 10, "k_low_level": 10, "k_conversations": 30, "total_k": 50, "reasoning": "Relationship query - use high-level for relationships, conversations for evidence"}
 }
 ```
@@ -442,8 +442,8 @@ Given a query and budget `k=50`, output:
 ```json
 {
   "query_triples": [["<Emma>", "?", "coffee", 0.95, 0.15, 0.9]],
-  "spatial_constraint": "kitchen",
-  "speaker_strict": null,
+  "spatial_constraint": "kitchen", 
+  "speaker_strict": null, 
   "allocation": {"k_high_level": 5, "k_low_level": 38, "k_conversations": 7, "total_k": 50, "reasoning": "Action query - prioritize low-level edges"}
 }
 ```
@@ -452,7 +452,7 @@ Given a query and budget `k=50`, output:
 ```json
 {
   "query_triples": [["<Emily>", "discusses", "<David>", 0.9, 0.3, 0.9]],
-  "spatial_constraint": null,
+  "spatial_constraint": null, 
   "speaker_strict": ["<Emily>", "<David>"],
   "allocation": {"k_high_level": 2, "k_low_level": 3, "k_conversations": 45, "total_k": 50, "reasoning": "Dialogue query - prioritize conversations with specific speakers"}
 }
@@ -475,8 +475,8 @@ Given a query and budget `k=50`, output:
 ```json
 {
   "query_triples": [["tape", "is at", "?", 0.8, 0.5, 0.15]],
-  "spatial_constraint": null,
-  "speaker_strict": null,
+  "spatial_constraint": null, 
+  "speaker_strict": null, 
   "allocation": {"k_high_level": 2, "k_low_level": 42, "k_conversations": 6, "total_k": 50, "reasoning": "Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"}
 }
 ```
@@ -640,15 +640,15 @@ Your task is to evaluate whether the current video clip (combined with any previ
 
 1. **Answer directly ([Answer])** when:
 - The current video (possibly combined with previous summaries) clearly shows the COMPLETE answer to the question
-- All necessary information is available from the current clip and/or previous summaries
-- The answer is unambiguous and complete
+   - All necessary information is available from the current clip and/or previous summaries
+   - The answer is unambiguous and complete
 - **EXCEPTION**: For counting questions, [Answer] is NOT ALLOWED until the last clip. See "SPECIAL QUESTION TYPES" below.
 
 2. **Search next video ([Search])** when:
-- The current video AND previous summaries together are still missing critical information
-- The answer requires events that occur in clips not yet watched
-- The information is ambiguous or unclear even when combining current video with previous summaries
-- The video shows partial information but key details are still missing after considering previous summaries
+   - The current video AND previous summaries together are still missing critical information
+   - The answer requires events that occur in clips not yet watched
+   - The information is ambiguous or unclear even when combining current video with previous summaries
+   - The video shows partial information but key details are still missing after considering previous summaries
 - **REQUIRED**: For counting questions, you MUST use [Search] for all clips except the last clip. See "SPECIAL QUESTION TYPES" below.
 
 **OUTPUT FORMAT**:

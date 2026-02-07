@@ -1,11 +1,17 @@
+# Core dependencies for video pipeline
 openai>=1.0.0
 opencv-python>=4.8.0
 numpy>=1.24.0
-huggingface-hub>=0.20.0
-pydub>=0.25.1
-faster-whisper>=0.10.0
-torch>=2.0.0
-pyannote.audio>=3.0.0
 requests>=2.31.0
 tqdm>=4.66.0
+faster-whisper>=0.10.0
 
+huggingface-hub>=0.20.0
+
+# Visualization (for visualization/visualize_graph_dedup.py, graph_to_html.py, graph_to_picture.py)
+pyvis>=0.3.0
+networkx>=3.0
+matplotlib>=3.7
+
+# Screenshot from HTML (visualization/html_to_screenshot.py)
+playwright>=1.40

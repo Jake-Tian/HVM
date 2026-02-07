@@ -166,29 +166,140 @@ def _print_summary(summary: Dict[str, Any]) -> None:
         print("  " + " | ".join(row[i].ljust(widths[i]) for i in range(len(row))))
 
 
+def _load_question_types(questions_path: str) -> Dict[str, List[str]]:
+    """Load robot.json and build question_id -> list of type strings."""
+    with open(questions_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    qid_to_types: Dict[str, List[str]] = {}
+    for video_id, video_data in data.items():
+        if not isinstance(video_data, dict):
+            continue
+        qa_list = video_data.get("qa_list")
+        if not isinstance(qa_list, list):
+            continue
+        for qa in qa_list:
+            if not isinstance(qa, dict):
+                continue
+            qid = qa.get("question_id")
+            if not qid:
+                continue
+            types_val = qa.get("type")
+            if isinstance(types_val, list):
+                types = [t for t in types_val if isinstance(t, str) and t.strip()]
+            elif isinstance(types_val, str) and types_val.strip():
+                types = [types_val.strip()]
+            else:
+                types = []
+            qid_to_types[qid] = types
+    return qid_to_types
+
+
+def summarize_by_category(
+    results: Dict[str, Any],
+    qid_to_types: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Compute accuracy breakdown by question category from robot.json types."""
+    type_stats = defaultdict(lambda: {"total": 0, "correct": 0})
+    matched = 0
+    unmatched = 0
+
+    for qid, item in results.items():
+        if not isinstance(item, dict):
+            continue
+        is_correct = _safe_bool(item.get("evaluator_correct"))
+        types = qid_to_types.get(qid, [])
+        if not types:
+            unmatched += 1
+            continue
+        matched += 1
+        for t in types:
+            type_stats[t]["total"] += 1
+            if is_correct:
+                type_stats[t]["correct"] += 1
+
+    def accuracy(c: int, n: int) -> float:
+        return round((c / n) * 100, 2) if n else 0.0
+
+    by_category = {}
+    for t in sorted(type_stats.keys()):
+        stats = type_stats[t]
+        by_category[t] = {
+            "total": stats["total"],
+            "correct": stats["correct"],
+            "accuracy_percent": accuracy(stats["correct"], stats["total"]),
+        }
+
+    return {
+        "by_category": by_category,
+        "matched_questions": matched,
+        "unmatched_questions": unmatched,
+    }
+
+
+def _print_category_breakdown(category_summary: Dict[str, Any]) -> None:
+    print("Accuracy breakdown by question category (from robot.json):")
+    print("")
+    by_cat = category_summary["by_category"]
+    if not by_cat:
+        print("  (no categories found)")
+        return
+    # Sort by category name for consistent output
+    for cat, stats in sorted(by_cat.items()):
+        print(f"  {cat}: {stats['correct']}/{stats['total']} ({stats['accuracy_percent']}%)")
+    print("")
+    print(f"  Matched questions: {category_summary['matched_questions']}")
+    print(f"  Unmatched (no type in robot.json): {category_summary['unmatched_questions']}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize results.json correctness and watch stats.")
     parser.add_argument(
         "--input",
-        default="data/results/results.json",
-        help="Path to results.json (default: data/results/results.json)",
+        default="data/results/result_egolife.json",
+        help="Path to results.json (default: data/results/result_egolife.json)",
+    )
+    parser.add_argument(
+        "--questions",
+        default="data/questions/robot.json",
+        help="Path to robot.json for category breakdown (default: data/questions/robot.json)",
     )
     parser.add_argument(
         "--output",
         default="",
         help="Optional path to write summary as JSON",
     )
+    parser.add_argument(
+        "--categories-only",
+        action="store_true",
+        help="Only print accuracy by question category (from robot.json)",
+    )
     args = parser.parse_args()
 
     with open(args.input, "r", encoding="utf-8") as f:
         results = json.load(f)
 
-    summary = summarize_results(results)
-    _print_summary(summary)
+    if args.categories_only:
+        qid_to_types = _load_question_types(args.questions)
+        category_summary = summarize_by_category(results, qid_to_types)
+        _print_category_breakdown(category_summary)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(category_summary, f, ensure_ascii=False, indent=2)
+    else:
+        summary = summarize_results(results)
+        _print_summary(summary)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
 
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2)
+        # Also print category breakdown if questions file exists
+        try:
+            qid_to_types = _load_question_types(args.questions)
+            category_summary = summarize_by_category(results, qid_to_types)
+            print("")
+            _print_category_breakdown(category_summary)
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":
