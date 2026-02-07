@@ -6,13 +6,15 @@ watching multiple clips in sequence.
 """
 
 from pathlib import Path
+from typing import Optional
 import glob
 from utils.mllm_pictures import generate_messages, get_response
 from utils.prompts import prompt_video_answer, prompt_video_answer_final
+from utils.token_monitor import TokenMonitor
 from .response_parser import parse_video_response
 
 
-def process_video_clip(clip_id, question, previous_summaries, frames_dir, is_last_clip):
+def process_video_clip(clip_id, question, previous_summaries, frames_dir, is_last_clip, token_monitor: Optional[TokenMonitor] = None):
     """
     Process a single video clip.
     
@@ -79,7 +81,7 @@ def process_video_clip(clip_id, question, previous_summaries, frames_dir, is_las
     
     # Get response from MLLM
     try:
-        video_response = get_response(messages)
+        video_response = get_response(messages, token_monitor=token_monitor)
     except Exception as e:
         raise Exception(f"Error getting response for clip {clip_id}: {e}")
     
@@ -107,7 +109,7 @@ def process_video_clip(clip_id, question, previous_summaries, frames_dir, is_las
     return result
 
 
-def watch_video_clips(question, clip_ids, video_name, initial_summary=None, print_progress=False):
+def watch_video_clips(question, clip_ids, video_name, initial_summary=None, print_progress=False, token_monitor: Optional[TokenMonitor] = None):
     """
     Watch video clips in sequence and collect responses.
     
@@ -139,7 +141,7 @@ def watch_video_clips(question, clip_ids, video_name, initial_summary=None, prin
         if print_progress:
             print(f"\n   Processing clip {clip_id} ({idx + 1}/{len(clip_ids)})...")
         
-        clip_result = process_video_clip(clip_id, question, previous_summaries, frames_dir, is_last_clip)
+        clip_result = process_video_clip(clip_id, question, previous_summaries, frames_dir, is_last_clip, token_monitor=token_monitor)
         
         # Check for errors
         if 'error' in clip_result:

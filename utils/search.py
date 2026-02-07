@@ -8,7 +8,7 @@ from utils.general import strip_code_fences
 from utils.reasoning.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
 
 
-def search_with_parse(query, graph, parse_query_response):
+def search_with_parse(query, graph, parse_query_response, skip_high_level: bool = False):
     """
     Search the graph and return search results based on a parsed query.
     
@@ -53,8 +53,11 @@ def search_with_parse(query, graph, parse_query_response):
 
     # Search the graph
     try:
-        # Search high-level edges
-        high_level_edges = graph.search_high_level_edges(query_triples, k_high_level)
+        # Search high-level edges (skip when ablation: no_highlevel)
+        if skip_high_level:
+            high_level_edges = []
+        else:
+            high_level_edges = graph.search_high_level_edges(query_triples, k_high_level)
         
         # Search low-level edges
         low_level_edges = graph.search_low_level_edges(

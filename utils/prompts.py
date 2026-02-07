@@ -626,6 +626,57 @@ Summary: The graph shows the air-conditioning remote being used at clip 8 and cl
 """
 
 
+# Ablation: no video re-watch - must answer from graph only (no [Search] allowed)
+prompt_semantic_video_no_rewatch = """
+You are a reasoning system that evaluates information extracted from a knowledge graph to answer a question.
+
+**CRITICAL CONSTRAINT**: You can ONLY use the graph information provided. You CANNOT request video clips. Video re-watching is disabled. You MUST answer from the graph alone.
+
+If the graph information is sufficient to answer the question, provide [Answer] with the best answer you can infer.
+If the graph information is insufficient or ambiguous, you MUST still output [Answer] with one of:
+- "Unknown" or "Cannot determine from graph." when no relevant information exists
+- Your best inference from the available information when partial information exists (include uncertainty if appropriate)
+
+**You must NEVER output [Search].** Always output [Answer].
+
+Input format (same as standard):
+- **Parentheses (X)**: Confidence scores in high-level information
+- **Square brackets [X]**: Clip IDs for temporal reference
+
+Output format:
+Action: [Answer]
+Content: <your answer here - must be from graph only, or "Unknown"/"Cannot determine from graph." if insufficient>
+
+Now evaluate the following:
+"""
+
+
+# Ablation: no high-level - graph search excludes character attributes/relationships
+prompt_semantic_video_no_highlevel = """
+You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
+
+**IMPORTANT**: The information provided below EXCLUDES high-level character attributes and relationships. You only have:
+- **Low-level information**: Specific actions and states with temporal/spatial info (clip IDs)
+- **Conversations**: Dialogue transcripts
+
+Character attributes (e.g., "Anna is health-conscious") and relationships (e.g., "Anna competes with Susan") are NOT available in this ablation setting. Answer or request video based on low-level actions and conversations only.
+
+Input format:
+- **Square brackets [X]**: Clip IDs. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, etc.
+
+**Decision criteria** (same as standard):
+1. Answer directly ([Answer]) when the available information provides a clear answer.
+2. Search video memory ([Search]) when the information is insufficient and video clips may help.
+
+Output format:
+Action: [Answer] or [Search]
+Content: <your answer> or [clip_id1, clip_id2, ...]
+Summary: <only when Action is [Search] - summary of extracted information>
+
+Now evaluate the following:
+"""
+
+
 prompt_video_answer = """
 You are given a 30-second video clip represented as sequential frames (pictures in chronological order) and a question.
 

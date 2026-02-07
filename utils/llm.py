@@ -1,6 +1,10 @@
 from openai import OpenAI
+from typing import Optional
 
-def generate_text_response(prompt):
+from utils.token_monitor import TokenMonitor
+
+
+def generate_text_response(prompt, token_monitor: Optional[TokenMonitor] = None):
     client = OpenAI()
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -12,6 +16,12 @@ def generate_text_response(prompt):
     content = response.choices[0].message.content
     if content is None:
         raise ValueError("OpenAI API returned None content. The response may have been filtered or empty.")
+    if token_monitor is not None and response.usage:
+        token_monitor.add_text_usage(
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            total_tokens=response.usage.total_tokens,
+        )
     return content
 
 def get_embedding(text):

@@ -4,15 +4,25 @@ import cv2
 import time
 import numpy as np
 from openai import OpenAI
+from typing import Optional
+
+from utils.token_monitor import TokenMonitor
 
 
-def get_response(messages):
+def get_response(messages, token_monitor: Optional[TokenMonitor] = None):
     client = OpenAI()
     response = client.chat.completions.create(
         model="gemini-2.5-flash",
         messages=messages,
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    if token_monitor is not None and response.usage:
+        token_monitor.add_vision_usage(
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            total_tokens=response.usage.total_tokens,
+        )
+    return content
 
 
 def generate_messages(images, prompt):

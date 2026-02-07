@@ -5,7 +5,7 @@ set -euo pipefail
 # 1) Download MP4
 # 2) Add subtitles + extract frames
 # 3) Build graph memory
-# 4) Answer questions and update results.json
+# 4) Answer questions with ablation (original, no_rewatch, no_highlevel) → results_*.json
 # 5) Cleanup MP4 and frames
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,20 +78,27 @@ PY
     continue
   fi
 
-  # Step 4: Answer questions and update results.json (process 2 questions in parallel)
+  # Step 4: Answer questions with ablation (original, no_rewatch, no_highlevel)
   if python3 - <<PY
 import json
 import pickle
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from reason import reason
+from reason_ablation import reason_original, reason_no_rewatch, reason_no_highlevel
 from reason_full import evaluate_answer
+from utils.token_monitor import TokenMonitor
 
 video_name = "${video}"
 
 questions_path = Path("data/questions/robot.json")
-results_path = Path("data/results/results.json")
+results_dir = Path("data/results")
+results_dir.mkdir(parents=True, exist_ok=True)
+
+result_files = {
+    "original": results_dir / "results_original.json",
+    "no_rewatch": results_dir / "results_no_rewatch.json",
+    "no_highlevel": results_dir / "results_no_highlevel.json",
+}
 graph_path = Path("data/semantic_memory") / f"{video_name}.pkl"
 
 if not graph_path.exists():
@@ -105,71 +112,95 @@ with open(questions_path, "r", encoding="utf-8") as f:
 
 video_questions = questions_data.get(video_name, {}).get("qa_list", [])
 
-existing_results = {}
-if results_path.exists():
+variants = [
+    ("original", reason_original),
+    ("no_rewatch", reason_no_rewatch),
+    ("no_highlevel", reason_no_highlevel),
+]
+
+token_summary_path = results_dir / "token_summary_ablation.json"
+token_totals = {}
+if token_summary_path.exists():
     try:
-        with open(results_path, "r", encoding="utf-8") as f:
-            existing_results = json.load(f)
+        with open(token_summary_path, "r", encoding="utf-8") as f:
+            token_totals = json.load(f)
     except json.JSONDecodeError:
-        existing_results = {}
+        token_totals = {}
 
-def process_question(qa):
-    """Process a single question and return (question_id, result_dict)"""
-    question_id = qa["question_id"]
-    question = qa["question"]
-    ground_truth = qa["answer"]
-    reasoning = qa.get("reasoning", "")
-    timestamp = qa.get("timestamp", "")
-    qa_type = qa.get("type", [])
-    before_clip = qa.get("before_clip", None)
+def add_usage(totals, new):
+    if not totals:
+        return dict(new)
+    for key in ("text_llm", "vision_llm"):
+        if key in new and key in totals:
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                totals[key][k] = totals[key].get(k, 0) + new[key].get(k, 0)
+    totals["video_watch_calls"] = totals.get("video_watch_calls", 0) + new.get("video_watch_calls", 0)
+    totals["total_tokens"] = totals.get("total_tokens", 0) + new.get("total_tokens", 0)
+    return totals
 
-    try:
-        reason_result = reason(question, graph, video_name)
-        predicted_answer = reason_result.get("final_answer", "")
-        is_correct = evaluate_answer(question, ground_truth, predicted_answer)
+for variant_name, reason_fn in variants:
+    print(f"\n  Running ablation: {variant_name}")
+    token_monitor = TokenMonitor()
+    existing = {}
+    result_path = result_files[variant_name]
+    if result_path.exists():
+        try:
+            with open(result_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except json.JSONDecodeError:
+            existing = {}
 
-        reason_result["evaluator_correct"] = is_correct
-        reason_result["ground_truth_answer"] = ground_truth
-        reason_result["reasoning"] = reasoning
-        reason_result["timestamp"] = timestamp
-        reason_result["type"] = qa_type
-        reason_result["before_clip"] = before_clip
+    for i, qa in enumerate(video_questions, 1):
+        question_id = qa["question_id"]
+        question = qa["question"]
+        ground_truth = qa["answer"]
+        reasoning = qa.get("reasoning", "")
+        timestamp = qa.get("timestamp", "")
+        qa_type = qa.get("type", [])
+        before_clip = qa.get("before_clip", None)
 
-        return (question_id, reason_result)
-    except Exception as e:
-        return (question_id, {
-            "error": str(e),
-            "video_name": video_name,
-            "question": question,
-            "ground_truth_answer": ground_truth,
-            "reasoning": reasoning,
-            "timestamp": timestamp,
-            "type": qa_type,
-            "before_clip": before_clip,
-            "evaluator_correct": False,
-        })
+        try:
+            reason_result = reason_fn(question, graph, video_name, token_monitor=token_monitor)
+            predicted = reason_result.get("final_answer", "")
+            is_correct = evaluate_answer(question, ground_truth, predicted, token_monitor=token_monitor)
 
-# Process questions in parallel (2 at a time)
-new_results = {}
-with ThreadPoolExecutor(max_workers=2) as executor:
-    futures = {executor.submit(process_question, qa): qa for qa in video_questions}
-    
-    completed = 0
-    for future in as_completed(futures):
-        question_id, result = future.result()
-        new_results[question_id] = result
-        completed += 1
-        if completed % 5 == 0:
-            print(f"  Processed {completed}/{len(video_questions)} questions...")
+            reason_result["evaluator_correct"] = is_correct
+            reason_result["ground_truth_answer"] = ground_truth
+            reason_result["reasoning"] = reasoning
+            reason_result["timestamp"] = timestamp
+            reason_result["type"] = qa_type
+            reason_result["before_clip"] = before_clip
+            existing[question_id] = reason_result
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            existing[question_id] = {
+                "error": str(e),
+                "video_name": video_name,
+                "question": question,
+                "ground_truth_answer": ground_truth,
+                "reasoning": reasoning,
+                "timestamp": timestamp,
+                "type": qa_type,
+                "before_clip": before_clip,
+                "evaluator_correct": False,
+            }
 
-# Update existing_results with new results (preserving results from other videos)
-existing_results.update(new_results)
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
 
-results_path.parent.mkdir(parents=True, exist_ok=True)
-with open(results_path, "w", encoding="utf-8") as f:
-    json.dump(existing_results, f, indent=2, ensure_ascii=False)
+    tdict = token_monitor.to_dict()
+    if variant_name not in token_totals:
+        token_totals[variant_name] = {"text_llm": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                                      "vision_llm": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                                      "video_watch_calls": 0, "total_tokens": 0}
+    token_totals[variant_name] = add_usage(token_totals[variant_name], tdict)
+    print(f"    Tokens: {tdict['total_tokens']} total, video calls: {tdict['video_watch_calls']}")
 
-print(f"✓ Updated results.json for {video_name} ({len(video_questions)} questions)")
+with open(token_summary_path, "w", encoding="utf-8") as f:
+    json.dump(token_totals, f, indent=2)
+
+print(f"✓ Updated results_original.json, results_no_rewatch.json, results_no_highlevel.json for {video_name} ({len(video_questions)} questions)")
 PY
   then
     : # success
