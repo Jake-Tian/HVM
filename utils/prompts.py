@@ -10,78 +10,61 @@ Your tasks:
      (a) Interaction with objects in the scene.
      (b) Interaction with other characters.
      (c) Actions and movements.
+   - Do NOT repeat the information from the conversation. 
    - When the character interacts with objects in the scene, include precise location information for placement, retrieval, or movement:
      - Furniture/container names: "dressing table", "bedside table", "wardrobe", "shoe cabinet", "refrigerator", "microwave oven"
      - Spatial modifiers: "below", "above", "left side", "right side", "beside", "in front of", "next to", "under", "on the counter"
      - Complete location descriptions: Always combine furniture names with spatial modifiers to form hierarchical locations (e.g., "cabinet below the dressing table", "second layer of the refrigerator", "cabinet on the left side of the wardrobe"). For retrieval actions, include source locations (e.g., "takes towel from Susan's bag", "gets mask from cabinet below dressing table")
    - Each entry must describe exactly one event/detail. Split sentences if needed.
-   - Output format: Python list of strings.
+   - Example output:
+     ["<Alice> enters the room.", 
+      "<Alice> takes cap from the cabinet on the left side of the wardrobe.", 
+      "<Alice> sits with <Bob> side by side on the couch.", 
+      "<Bob> watches TV.", 
+      "<robot> puts the coffee on the table."]
 
 2. **Conversation**
    - Record the dialogue based on subtitles.
-   - Always use characters' real name existed in the subtitle. 
+   - Always use characters' real name existed in the subtitle.
    - Output format: List of two-element lists [character, content].
+   - Example output: [["<Alice>", "Hello, my name is Alice."], ["<Bob>", "Hi, I'm Bob. Nice to meet you."]]
 
-3. **Character Appearance**
-   - Describe each character's appearance: facial features, clothing, body shape, hairstyle, or other distinctive characteristics.
+3. **Characters' Appearance**
+   - Describe or update each character's appearance: facial features, clothing, body shape, hairstyle, or other distinctive characteristics.
    - Each characteristic should be concise, separated by commas.
-   - **Character Matching Rules** (MUST follow before creating new characters):
-     1. **Check ALL previously seen characters** (both known names like <Anna>, <Susan> AND unknown like <character_1>, <character_2>) from ALL earlier clips.
-     2. **Compare appearance** focusing on:
-        - **Stable features**: Body shape, facial structure, skin tone, general build
-        - **Variable features** (may change): Hair length/style, clothing, accessories, glasses
-        - **Distinctive combinations**: Unique feature combinations that identify a person
-     3. **Match if**: Person matches based on stable features and distinctive combinations, even if variable features changed.
-     4. **If match found**:
-        - Known character: Use that name directly (e.g., <Anna>)
-        - Unknown character: Add "Equivalence: <character_X>, <Anna>" at **start of characters_behavior**
-        - Do NOT create new character_appearance entry
-     5. **Only create new character** if NO match found after thorough comparison:
-        - If name mentioned in conversation: Use that name
-        - Otherwise: Create <character_X> with lowest available number
-   - **Existing characters**: Update if changes observed (hair, clothing), enhance if new details visible, otherwise keep unchanged. Keep appearance info even if character leaves scene.
-   - **Minimize total characters**: Goal is MINIMUM unique characters. When in doubt, match to existing rather than creating new.
-   - Output format: Python dictionary {<character>: appearance information}.
+   - Existing characters: Update if changes observed (hair, clothing), enhance if new details visible, otherwise keep unchanged. Keep appearance info even if character leaves scene.
+   - If a character is not visible in scene, then do not include in the characters' appearance list.
+   - Example output:
+     [Appearance(name="<Alice>", appearance="female, fat, ponytail, wear glasses, short-sleeved shirt, blue jeans, white sneakers"),
+      Appearance(name="<Bob>", appearance="male, thin, short hair, no glasses, black jacket, black pants, black shoes")]
 
 4. **Scene**: Use one word or phrase to describe the scene in the current video (eg. "bedroom", "gym", "office", etc.).
-   - Output format: Python string.
 
-Special Rules:
-- Use angle brackets to represent characters eg. <Alice>, <Bob>, <robot> etc.
+## Character Naming Rules:
+- Use angle brackets to represent characters (eg. <Alice>, <Bob>, <robot>, <character_1> etc.) in behaviors, conversation, and character appearance.
 - Include the robot (<robot>) if present:
   - It wears black gloves and has no visible face (it holds the camera).
   - Describe its behavior and conversation.
-  - Do NOT include robot in character appearance information, but include it in characters_behavior and conversation.
-- All characters' name mentioned in behaviors and conversation must exists in character appearance. 
+  - Do NOT include robot in character appearance information, but include it in behaviors and conversation.
+- There are two types of characters: named characters and unknown characters.
+  - Named characters are characters with a known name (eg. <Alice>, <Bob>, <robot>).
+  - Unknown characters are characters with an unknown name (eg. <character_1>, <character_2>, etc.).
+
+## Character Matching Rules:
+For characters appearing in the video (MUST follow before creating new characters):
+- First, check if the subtitle name is provided. If so, use it as the character name (eg. <Anna>). 
+  - Also compare the character name with the unknown characters (<character_X>) in the appearance list. 
+    - If high similarity is found, add "Equivalence: <character_X>, <Anna>" at **start of behaviors**. This indicates that the character is the same as the unknown character.
+    - If the equivalence is found, refer to this character by its character name instead of <character_X> in the behaviors, conversation, and character appearance.
+- If a character's name is not provided in the subtitle, match this character's appearance to the characters in the appearance list. 
+  - If high similarity is found, refer to this character by its name in the appearance list. 
+  - If no match is found, create a new unknown character with lowest available number starting from <character_1>. 
+  - Our goal is to minimize the number of unknown characters. When uncertain, match to existing rather than creating new.
+
+Additional Rules:
 - Maintain strict chronological order.
 - Avoid repetition in both behavior and conversation.
-- If no behavior or conversation is observed, return an empty list for characters_behavior and conversation.
-
-Example Output:
-Return a Python dictionary with exactly four keys:
-{
-    "characters_behavior": [
-        "<Alice> enters the room.", 
-        "<Alice> takes cap from the cabinet on the left side of the wardrobe.", 
-        "<Alice> sits with <Bob> side by side on the couch.", 
-        "<Bob> watches TV.", 
-        "<robot> puts the coffee on the table."
-    ],
-    "conversation": [
-        ["<Alice>", "Hello, my name is Alice."], 
-        ["<Bob>", "Hi, I'm Bob. Nice to meet you."]
-    ], 
-    "character_appearance": {
-      "<Alice>": "female, fat, ponytail, wear glasses, short-sleeved shirt, blue jeans, white sneakers", 
-      "<Bob>": "male, thin, short hair, no glasses, black jacket, black pants, black shoes"
-    }, 
-    "scene": "bedroom"
-}
-
-Checklist: 
-- [ ] Output is a JSON object.
-- [ ] Dictionary has exactly 4 keys: "characters_behavior", "conversation", "character_appearance", "scene".
-- [ ] No duplicate or repetitive entries in behavior or conversation.
+- If no behavior or conversation is observed, return an empty list for behaviors and conversation.
 """
 
 
@@ -126,7 +109,11 @@ No explanation. No markdown. No extra text.
 - May be:
   - Characters (use verbatim names with angle brackets)
   - Objects (nouns, physical or abstract)
-- Copy entity names **verbatim**
+- **Character/Object format rule (STRICT)**:
+  - Characters: must keep angle brackets, e.g. `<Alice>`, `<robot>`, `<character_1>`.
+  - Objects: must **NOT** use angle brackets.
+  - If an object appears with angle brackets in input, remove them in output.
+- Copy entity names **verbatim** (except removing angle brackets from objects)
 - Use `null` if no target exists
 - Do **not** invent entities
 
@@ -159,6 +146,7 @@ Examples:
 
 5. OBJECT HANDLING
 - Objects are nouns
+- NEVER wrap object nodes with angle brackets (`< >`)
 - Singularize plurals  
   books → book
 - Keep adjectives attached to the object  
@@ -183,17 +171,22 @@ Examples:
 
 8. STATE REPRESENTATION
 - If an action implies a **resulting state**, add a state triple.
-- Preserve complete location phrases as single entities in target fields. 
+- For location/spatial relations, put location information in the **content** field and keep
+  source/target as clean entities (character or noun). Do NOT put long location phrases in target.
 Examples:
 - "<robot> puts coffee on table" → ["<robot>", "puts", "coffee"], ["coffee", "is on", "table"]
 - "<Alice> takes towel from Susan's bag" → ["<Alice>", "takes", "towel"], ["towel", "is in", "Susan's bag"]
+- "<Betty> sits on the right side of the sofa" → ["<Betty>", "sits on the right side of", "sofa"]
 
-9. DEDUPLICATION
+9. INFORMATION CONSISTENCY
+- Ensure there is no information loss when converting the sentence into triples. Do NOT remove any adjectives, adverbs, or other modifiers.
+
+10. DEDUPLICATION
 - Keep only **distinct, meaningful** actions
 - Do NOT duplicate states already implied by a stronger action
 - Redistribution of information across triples is allowed
 
-10. FALLBACK RULE
+11. FALLBACK RULE
 If unsure, output a **minimal transformation**:
 [source, verb, target]
 
@@ -203,7 +196,8 @@ Input:
   "<Michael> pats <Susan>'s shoulder and smiles.",
   "<robot> places the red cup on the counter.",
   "<Lisa> dances and sings happily.",
-  "<John> takes his wallet and keys from the drawer."
+  "<John> takes his wallet and keys from the drawer.", 
+  "<Betty> carries a red plastic bag in her left hand and a white plastic bag in her right hand."
 ]
 
 Output:
@@ -215,7 +209,9 @@ Output:
   ["<Lisa>", "dances happily", null],
   ["<Lisa>", "sings happily", null],
   ["<John>", "takes", "John's wallet"],
-  ["<John>", "takes", "John's key"]
+  ["<John>", "takes", "John's key"], 
+  ["<Betty>", "carries in left hand", "red plastic bag"],
+  ["<Betty>", "carries in right hand", "white plastic bag"]
 ]
 
 Now convert the following list of action sentences into triples:
@@ -296,7 +292,8 @@ Your tasks:
 - Summarize the key topics, decisions, or outcomes discussed in the conversation.
 - Write 2-4 concise sentences covering the main themes and important points.
 - Focus on what was discussed and decided, not on individual statements.
-- Output format: JSON string value.
+- Output format: string
+- Example: "Alice and Bob discussed their upcoming project. They agreed on a timeline and assigned tasks. Bob expressed concerns about the deadline, which Alice addressed by suggesting additional resources."
 
 2. **Character Attributes**
 - Extract each character's attributes revealed through their dialogue and interaction style.
@@ -306,10 +303,14 @@ Your tasks:
   - Concrete actions or behaviors (e.g., "asked a question", "walked away")
   - Temporary emotional states (use persistent personality traits instead)
   - Information not directly supported by the conversation
-- Output format: JSON array of arrays. Each inner array: [character, attribute, confidence_score].
 - Confidence scores range from 0-100. Only include attributes with confidence >= 50.
 - Avoid redundant or overly similar attributes (e.g., don't include both "friendly" and "kind" unless distinctly different).
 - Use angle brackets for character names (e.g., "<Alice>", "<Bob>").
+- Output format: List of three-element lists: [character, attribute, confidence_score].
+- Example: [["<Alice>", "organized", 85], ["<Alice>", "problem-solver", 75], ["<Bob>", "detail-oriented", 80], ["<Bob>", "cautious", 70]]
+- Bad Examples (do not follow): 
+  [["<Alice>", "asked a question", 90],  // WRONG: This is an action, not an attribute
+  ["<Bob>", "has brown hair", 80]]       // WRONG: This is appearance, not attribute
 
 3. **Character Relationships**
 - Extract abstract relationships between characters based on their dialogue interactions.
@@ -319,46 +320,19 @@ Your tasks:
   - Specific actions or events (e.g., "<Alice> speaks with <Bob>", "<Alice> asked <Bob> about X")
   - Temporary interactions (focus on underlying relationship patterns)
   - Dialogue content or topics discussed (focus on the relationship itself, not what they discussed)
-- Output format: JSON array of arrays. Each inner array: [character1, relationship, character2, confidence_score].
 - Confidence scores range from 0-100. Only include relationships with confidence >= 50.
 - Do not generate symmetric duplicates (if "<Alice> respects <Bob>" is included, don't automatically include reverse unless explicitly different).
 - It is acceptable to generate only a few relationships if there is insufficient information.
+- Output format: List of four-element lists: [character1, relationship, character2, confidence_score].
+- Example: [["<Alice>", "is friend with", "<Bob>", 90], ["<Alice>", "is teacher of", "<Charlie>", 80], ["<Charlie>", "respects", "<Alice>", 70]]
+- Bad Examples (do not follow): 
+  [["<Alice>", "spoke with", "<Bob>", 90],     // WRONG: This is an action, not a relationship
+  ["<Alice>", "discussed the project", "<Bob>", 85]]  // WRONG: This is dialogue content, not relationship
 
 ### EDGE CASES
 - If conversation has only one character speaking: focus on their attributes, skip relationships.
 - If conversation is empty or unclear: return empty arrays for attributes and relationships, provide a brief summary noting the issue.
 - If character names are ambiguous: use the names as provided in the conversation.
-
-### OUTPUT FORMAT
-Return a JSON dictionary with exactly three keys: "summary", "character_attributes", "characters_relationships".
-
-### EXAMPLE OUTPUT
-{
-  "summary": "Alice and Bob discussed their upcoming project. They agreed on a timeline and assigned tasks. Bob expressed concerns about the deadline, which Alice addressed by suggesting additional resources.",
-  "character_attributes": [
-    ["<Alice>", "organized", 85],
-    ["<Alice>", "problem-solver", 75],
-    ["<Bob>", "detail-oriented", 80],
-    ["<Bob>", "cautious", 70]
-  ],
-  "characters_relationships": [
-    ["<Alice>", "collaborates with", "<Bob>", 90],
-    ["<Bob>", "trusts", "<Alice>", 75]
-  ]
-}
-
-### BAD EXAMPLE (What NOT to do)
-{
-  "summary": "The conversation is about the characters' attributes and relationships.",
-  "character_attributes": [
-    ["<Alice>", "asked a question", 90],  // WRONG: This is an action, not an attribute
-    ["<Bob>", "has brown hair", 80]       // WRONG: This is appearance, not attribute
-  ],
-  "characters_relationships": [
-    ["<Alice>", "spoke with", "<Bob>", 90],     // WRONG: This is an action
-    ["<Alice>", "discussed the project", "<Bob>", 85]  // WRONG: This is dialogue content, not relationship
-  ]
-}
 
 Now summarize the following conversation:
 """
@@ -377,6 +351,11 @@ You are a query parser for a knowledge graph system that stores video informatio
 - Format: `["<Alice>", "confident", null]` or `["<Alice>", "is friend with", "<Bob>"]`
 - **Limited quantity** (<10 per query) - allocate 5-10 max when needed, fewer otherwise
 - Use for: character traits, relationships, "who is" queries
+
+**APPEARANCE EDGES**: Character appearance features
+- Format: `["<Alice>", "wears red hoodie", null]`
+- Use ONLY when question asks about appearance (looks, clothing, hairstyle, body shape, facial features, accessories).
+- Do NOT use for behavior/action/location questions.
 
 **LOW-LEVEL EDGES**: Specific actions/states with scene info
 - Format: `["<Alice>", "picks up", "coffee"]` or `["coffee", "is on", "table"]`
@@ -414,11 +393,16 @@ Given a query and budget `k=50`, output:
 - **Source location queries**: "where can robot get X?" / "where did X get Y from?" → Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 - **Allocation for location queries**: Prioritize low-level edges (35-45) since they contain spatial information. Use conversations (5-10) only if placement instructions might be mentioned in dialogue.
 
-2. **Allocation** `{k_high_level, k_low_level, k_conversations}`:
+2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
    - Total must be ≤ 50
    - High-level: 5-10 max (limited availability)
    - Low-level: 30-45 for action queries
    - Conversations: 10-45 based on needs
+   - Appearance:
+     - If the question is about character appearance, clothing, hairstyle, facial/body features, accessories:
+       allocate `k_appearance` > 0 (typically 5-15).
+     - Otherwise, `k_appearance` MUST be 0.
+   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance`
 
 3. **speaker_strict**: 
    - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
@@ -429,63 +413,68 @@ Given a query and budget `k=50`, output:
 ## EXAMPLES
 
 **Example 1**: "What is Anna's relationship with Susan?"
-```json
-{
-  "query_triples": [["<Anna>", "relationship", "<Susan>", 0.95, 0.2, 0.95]],
-  "spatial_constraint": null, 
-  "speaker_strict": null, 
-  "allocation": {"k_high_level": 10, "k_low_level": 10, "k_conversations": 30, "total_k": 50, "reasoning": "Relationship query - use high-level for relationships, conversations for evidence"}
-}
-```
+ParseQueryOutput(
+  query_triples=[["<Anna>", "relationship", "<Susan>", 0.95, 0.2, 0.95]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=10, k_low_level=10, k_conversations=30, k_appearance=0, total_k=50,
+    reasoning="Relationship query - use high-level for relationships, conversations for evidence"
+  )
+)
 
 **Example 2**: "What did Emma do with the coffee in the kitchen?"
-```json
-{
-  "query_triples": [["<Emma>", "?", "coffee", 0.95, 0.15, 0.9]],
-  "spatial_constraint": "kitchen", 
-  "speaker_strict": null, 
-  "allocation": {"k_high_level": 5, "k_low_level": 38, "k_conversations": 7, "total_k": 50, "reasoning": "Action query - prioritize low-level edges"}
-}
-```
+ParseQueryOutput(
+  query_triples=[["<Emma>", "?", "coffee", 0.95, 0.15, 0.9]],
+  spatial_constraint="kitchen",
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=5, k_low_level=38, k_conversations=7, k_appearance=0, total_k=50,
+    reasoning="Action query - prioritize low-level edges"
+  )
+)
 
 **Example 3**: "What did Emily and David discuss?"
-```json
-{
-  "query_triples": [["<Emily>", "discusses", "<David>", 0.9, 0.3, 0.9]],
-  "spatial_constraint": null, 
-  "speaker_strict": ["<Emily>", "<David>"],
-  "allocation": {"k_high_level": 2, "k_low_level": 3, "k_conversations": 45, "total_k": 50, "reasoning": "Dialogue query - prioritize conversations with specific speakers"}
-}
-```
+ParseQueryOutput(
+  query_triples=[["<Emily>", "discusses", "<David>", 0.9, 0.3, 0.9]],
+  spatial_constraint=None,
+  speaker_strict=["<Emily>", "<David>"],
+  allocation=ParseQueryAllocation(
+    k_high_level=2, k_low_level=3, k_conversations=45, k_appearance=0, total_k=50,
+    reasoning="Dialogue query - prioritize conversations with specific speakers"
+  )
+)
 
 **Example 4**: "How many things on the dressing table are not often used by Lily?"
-```json
-{
-  "query_triples": [
-    ["<Lily>", "use", "things", 0.9, 0.7, 0.4],
-    ["things", "is on", "dressing table", 0.2, 0.4, 0.4]
+ParseQueryOutput(
+  query_triples=[
+    ["<Lily>", "use", "?", 0.9, 0.7, 0.4],
+    ["?", "is on", "dressing table", 0.2, 0.4, 0.4]
   ],
-  "spatial_constraint": null,
-  "speaker_strict": null,
-  "allocation": {"k_high_level": 2, "k_low_level": 40, "k_conversations": 8, "total_k": 50, "reasoning": "Main triple targets usage by Lily; helper triple constrains items to dressing table"}
-}
-```
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=2, k_low_level=40, k_conversations=8, k_appearance=0, total_k=50,
+    reasoning="Main triple targets usage by Lily; helper triple constrains items to dressing table"
+  )
+)
 
 **Example 5**: "where is the tape now?"
-```json
-{
-  "query_triples": [["tape", "is at", "?", 0.8, 0.5, 0.15]],
-  "spatial_constraint": null, 
-  "speaker_strict": null, 
-  "allocation": {"k_high_level": 2, "k_low_level": 42, "k_conversations": 6, "total_k": 50, "reasoning": "Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"}
-}
-```
+ParseQueryOutput(
+  query_triples=[["tape", "is at", "?", 0.8, 0.5, 0.15]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=2, k_low_level=42, k_conversations=6, k_appearance=0, total_k=50,
+    reasoning="Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"
+  )
+)
 
 Now parse the following query and allocate k=50:
 """
 
 
-prompt_semantic_episodic = """
+prompt_graph_episodic = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
 The system processes video information in three layers:
@@ -528,7 +517,7 @@ Content: What happened before Alice left the room that caused her to leave?
 """
 
 
-prompt_semantic_video = """
+prompt_graph_video = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
 You will be provided with extracted knowledge from the video graph, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
@@ -540,47 +529,46 @@ Input format:
   Applies to both low-level actions and conversation messages.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
 
+Output should include: 
+1. answer: True or False
+2. content: <your answer here> or [clip_id1, clip_id2, ...]
+3. summary: <only present when answer is False - summary of extracted information from the graph>
+
 **Decision criteria**: 
-1. Answer directly ([Answer]) when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose [Answer].
-2. Search video memory ([Search]) when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
+1. Answer directly when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose Answer.
+  Output should be: 
+  - answer: True
+  - content: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
+  - summary: None
 
-Output format: 
-Action: [Answer] or [Search]
-Content: <your answer here> or [clip_id1, clip_id2, ...]
-Summary: <only present when Action is [Search] - summary of extracted information from the graph>
-
-If the action is [Search]:
-- **Content**: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
-- **Summary**: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
-
-If the action is [Answer]:
-- **Content**: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
-- Do not include a Summary field.
+2. Search video memory when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
+  Output should be:
+  - answer: False
+  - content: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
+  - summary: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
 
 Special types of questions:
 1. Spatial/Location questions (questions asking "where" or "which place"): 
-  - Only choose [Answer] if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
-  - If the location information is generic (e.g., "kitchen", "office", "living room"), choose [Search].
-  - If the action is [Search]:
-    - Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]. 
+  - answer is True only if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
+  - If the location information is generic (e.g., "kitchen", "office", "living room"), answer is False: 
+    - content: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]. 
     - Include the clips where the actions occured, and the clips before and after the actions if neccessary. 
-    - Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences. Exclude irrelevant information such as character attributes, relationships, and conversations.
+    - summary: Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences. Exclude irrelevant information such as character attributes, relationships, and conversations.
 
 2. Temporal Sequence questions (questions asking about event order, sequence, "first", "before", "after", "should X be done first", "what happened before/after X", etc.):
-  - Only choose [Answer] if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
-  - If the temporal sequence is unclear, ambiguous, or missing key events, choose [Search].
+  - answer is True only if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
+  - If the temporal sequence is unclear, ambiguous, or missing key events, answer is False.
   - **Distinguish**: "Should X be done first?" asks about INSTRUCTIONS/intended order, while "What happened before/after X?" asks about ACTUAL sequence.
-  - If the action is [Search]:
-    - **Clip selection priority**: Focus on clips BEFORE or AFTER the key action/event based on the temporal context of the question. If information is insufficient, prioritize clips that occur BEFORE the key action.
-    - **Summary format**: MUST clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." Use this format for each relevant event in chronological order.
+  - If answer is False:
+    - content: Focus on clips BEFORE or AFTER the key action/event based on the temporal context of the question. If information is insufficient, prioritize clips that occur BEFORE the key action.
+    - summary: MUST clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." Use this format for each relevant event in chronological order.
     - Focus the summary on events in chronological order with explicit clip IDs, character actions and their sequence, and what happened before/after the key action. Exclude irrelevant information.
 
 3. Counting questions (questions asking "how many", "how many times", "how many pieces", "how many kinds", etc.):
-  - Only choose [Answer] if the graph provides explicit counts or if all occurrences can be clearly enumerated from the graph information.
-  - If counts are vague, incomplete, or if multiple occurrences might be missed, choose [Search].
-  - If the action is [Search]:
-    - **Clip selection**: Include ALL clips where the mentioned event takes place. Also include clip IDs between two mentioned events if necessary to ensure no counting is missed during the information storage step.
-    - **Summary format**: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [character/event] [action] [count]." Example: "In clip 18, A did something once; in clip 20, A did something twice."
+  - answer is True only if the graph provides explicit counts or all occurrences can be clearly enumerated from the graph information.
+  - If counts are vague, incomplete, or if multiple occurrences might be missed, then answer is False: 
+    - content: Include ALL clips where the mentioned event takes place. Also include clip IDs between two mentioned events if necessary to ensure no counting is missed during the information storage step.
+    - summary: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [character/event] [action] [count]." Example: "In clip 18, A did something once; in clip 20, A did something twice."
     - Focus the summary on enumerating each occurrence with its clip ID and count, ensuring all events are accounted for. Exclude irrelevant information.
 
 Examples:
@@ -588,98 +576,110 @@ Examples:
 Question: What is the relationship between Anna and Susan?
 Extracted information: High-level: Anna competes with Susan (85). Anna is competitive (90). Susan is competitive (88). Low-level: [12] Anna challenges Susan to a game. [15] Anna and Susan prepare for competition. Conversations: Conversation 1: Anna and Susan discuss their upcoming game, with Anna expressing confidence in winning.
 Output:
-Action: [Answer]
-Content: Anna and Susan are competitors.
+GraphVideoOutput(
+  answer=True,
+  content="Anna and Susan are competitors.",
+  summary=None
+)
 
 Question: What did Anna decide to drink before the game?
 Extracted information: High-level: Anna is health-conscious (80). Anna prefers water (85). Low-level: [15] Anna picks up Anna's water bottle. [16] Susan picks up Susan's sports drink. Conversations: Conversation 2: Anna says "I just want a bottle of water. That's fine. No sports soda for me." Susan responds "you never drink sports soda, and just mineral water."
 Output:
-Action: [Answer]
-Content: Anna decided to drink water before the game.
+GraphVideoOutput(
+  answer=True,
+  content="Anna decided to drink water before the game.",
+  summary=None
+)
 
 Question: What happened after Alice received the gift?
 Extracted information: High-level: (no sequence information) Low-level: [15] Bob gives Alice wrapped gift box. [16] Alice unwraps gift box. [17] Alice reads book. Conversations: (no relevant conversations)
 Output:
-Action: [Answer]
-Content: After receiving the gift, Alice unwrapped it and then read the book.
+GraphVideoOutput(
+  answer=True,
+  content="After receiving the gift, Alice unwrapped it and then read the book.",
+  summary=None
+)
 
 Question: Where is the book Lucky read just now?
 Extracted information: High-level: (no location information) Low-level: [8] Lucky reads book. (bedroom) [9] Lucky places book. (bedroom) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [8, 9, 7]
-Summary: The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames.
+GraphVideoOutput(
+  answer=False,
+  content=[8, 9, 7],
+  summary="The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames."
+)
 
 Question: Should the balloons be put up first?
 Extracted information: High-level: (no sequence instructions) Low-level: [10] Betty instructs to put up balloons. (living room) [12] Betty and Linda write message on balloons. (living room) [14] Betty and Linda put up balloons. (living room) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [10, 12, 14, 11, 13]
-Summary: The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order.
+GraphVideoOutput(
+  answer=False,
+  content=[10, 12, 14, 11, 13],
+  summary="The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order."
+)
 
 Question: How many times was the air-conditioning remote used?
 Extracted information: High-level: (no count information) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [8, 11, 9, 10]
-Summary: The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step.
+GraphVideoOutput(
+  answer=False,
+  content=[8, 11, 9, 10],
+  summary="The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step."
+)
 """
 
 
 # Ablation: no high-level - graph search excludes character attributes/relationships
-prompt_semantic_video_no_highlevel = """
+prompt_graph_video_no_highlevel = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
-**IMPORTANT**: The information provided below EXCLUDES high-level character attributes and relationships. You only have:
-- **Low-level information**: Specific actions and states with temporal/spatial info (clip IDs)
-- **Conversations**: Dialogue transcripts
-
-Character attributes (e.g., "Anna is health-conscious") and relationships (e.g., "Anna competes with Susan") are NOT available in this ablation setting. Answer or request video based on low-level actions and conversations only.
+You will be provided with extracted knowledge from the video graph, including characters' behaviors and conversations.
 
 Input format:
 - **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
   Applies to both low-level actions and conversation messages.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
 
-**Decision criteria**:
-1. Answer directly ([Answer]) when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose [Answer].
-2. Search video memory ([Search]) when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
+Output should include: 
+1. answer: True or False
+2. content: <your answer here> or [clip_id1, clip_id2, ...]
+3. summary: <only present when answer is False - summary of extracted information from the graph>
 
-Output format:
-Action: [Answer] or [Search]
-Content: <your answer here> or [clip_id1, clip_id2, ...]
-Summary: <only present when Action is [Search] - summary of extracted information from the graph>
+**Decision criteria**: 
+1. Answer directly when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose Answer.
+  Output should be: 
+  - answer: True
+  - content: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
+  - summary: None
 
-If the action is [Search]:
-- **Content**: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
-- **Summary**: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
-
-If the action is [Answer]:
-- **Content**: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
-- Do not include a Summary field.
+2. Search video memory when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
+  Output should be:
+  - answer: False
+  - content: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
+  - summary: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
 
 Special types of questions:
 1. Spatial/Location questions (questions asking "where" or "which place"):
-  - Only choose [Answer] if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
-  - If the location information is generic (e.g., "kitchen", "office", "living room"), choose [Search].
-  - If the action is [Search]:
+  - answer is True only if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
+  - If the location information is generic (e.g., "kitchen", "office", "living room"), answer is False.
+  - If answer is False:
     - Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...].
     - Include the clips where the actions occured, and the clips before and after the actions if neccessary.
     - Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences.
 
 2. Temporal Sequence questions (questions asking about event order, sequence, "first", "before", "after", "should X be done first", "what happened before/after X", etc.):
-  - Only choose [Answer] if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
-  - If the temporal sequence is unclear, ambiguous, or missing key events, choose [Search].
+  - answer is True only if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
+  - If the temporal sequence is unclear, ambiguous, or missing key events, answer is False.
   - **Distinguish**: "Should X be done first?" asks about INSTRUCTIONS/intended order, while "What happened before/after X?" asks about ACTUAL sequence.
-  - If the action is [Search]:
+  - If answer is False:
     - **Clip selection priority**: Focus on clips BEFORE or AFTER the key action/event based on the temporal context of the question. If information is insufficient, prioritize clips that occur BEFORE the key action.
     - **Summary format**: MUST clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." Use this format for each relevant event in chronological order.
     - Focus the summary on events in chronological order with explicit clip IDs, character actions and their sequence, and what happened before/after the key action.
 
 3. Counting questions (questions asking "how many", "how many times", "how many pieces", "how many kinds", etc.):
-  - Only choose [Answer] if the graph provides explicit counts or if all occurrences can be clearly enumerated from the graph information.
-  - If counts are vague, incomplete, or if multiple occurrences might be missed, choose [Search].
-  - If the action is [Search]:
+  - answer is True only if the graph provides explicit counts or if all occurrences can be clearly enumerated from the graph information.
+  - If counts are vague, incomplete, or if multiple occurrences might be missed, then answer is False.
+  - If answer is False:
     - **Clip selection**: Include ALL clips where the mentioned event takes place. Also include clip IDs between two mentioned events if necessary to ensure no counting is missed during the information storage step.
     - **Summary format**: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [character/event] [action] [count]." Example: "In clip 18, A did something once; in clip 20, A did something twice."
     - Focus the summary on enumerating each occurrence with its clip ID and count, ensuring all events are accounted for.
@@ -689,42 +689,56 @@ Examples:
 Question: What did Anna decide to drink before the game?
 Extracted information: High-level: (not available) Low-level: [15] Anna picks up Anna's water bottle. [16] Susan picks up Susan's sports drink. Conversations: Anna says "I just want a bottle of water. That's fine. No sports soda for me." Susan responds "you never drink sports soda, and just mineral water."
 Output:
-Action: [Answer]
-Content: Anna decided to drink water before the game.
+GraphVideoOutput(
+  answer=True,
+  content="Anna decided to drink water before the game.",
+  summary=None
+)
 
 Question: What happened after Alice received the gift?
 Extracted information: High-level: (not available) Low-level: [15] Bob gives Alice wrapped gift box. [16] Alice unwraps gift box. [17] Alice reads book. Conversations: (no relevant conversations)
 Output:
-Action: [Answer]
-Content: After receiving the gift, Alice unwrapped it and then read the book.
+GraphVideoOutput(
+  answer=True,
+  content="After receiving the gift, Alice unwrapped it and then read the book.",
+  summary=None
+)
 
 Question: What is the relationship between Anna and Susan?
 Extracted information: High-level: (not available) Low-level: [12] Anna challenges Susan to a game. [15] Anna and Susan prepare for competition. Conversations: Anna and Susan discuss their upcoming game, with Anna expressing confidence in winning.
 Output:
-Action: [Search]
-Content: [12, 15, 14, 16]
-Summary: The graph shows low-level actions but does not contain character relationships (high-level excluded). The relationship between Anna and Susan cannot be inferred from actions and conversations alone. Clips 12 and 15 show competitive preparation; additional clips may reveal their relationship dynamics.
+GraphVideoOutput(
+  answer=False,
+  content=[12, 15, 14, 16],
+  summary="The graph shows low-level actions but does not contain character relationships (high-level excluded). The relationship between Anna and Susan cannot be inferred from actions and conversations alone. Clips 12 and 15 show competitive preparation; additional clips may reveal their relationship dynamics."
+)
 
 Question: Where is the book Lucky read just now?
 Extracted information: High-level: (not available) Low-level: [8] Lucky reads book. (bedroom) [9] Lucky places book. (bedroom) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [8, 9, 7]
-Summary: The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames.
+GraphVideoOutput(
+  answer=False,
+  content=[8, 9, 7],
+  summary="The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames."
+)
 
 Question: Should the balloons be put up first?
 Extracted information: High-level: (not available) Low-level: [10] Betty instructs to put up balloons. (living room) [12] Betty and Linda write message on balloons. (living room) [14] Betty and Linda put up balloons. (living room) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [10, 12, 14, 11, 13]
-Summary: The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order.
+GraphVideoOutput(
+  answer=False,
+  content=[10, 12, 14, 11, 13],
+  summary="The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order."
+)
 
 Question: How many times was the air-conditioning remote used?
 Extracted information: High-level: (not available) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
-Action: [Search]
-Content: [8, 11, 9, 10]
-Summary: The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step.
+GraphVideoOutput(
+  answer=False,
+  content=[8, 11, 9, 10],
+  summary="The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step."
+)
 
 Now evaluate the following:
 """
@@ -742,31 +756,23 @@ Your task is to evaluate whether the current video clip (combined with any previ
 
 **DECISION CRITERIA**:
 
-1. **Answer directly ([Answer])** when:
+1. **Answer directly** (answer=True) when:
 - The current video (possibly combined with previous summaries) clearly shows the COMPLETE answer to the question
    - All necessary information is available from the current clip and/or previous summaries
    - The answer is unambiguous and complete
-- **EXCEPTION**: For counting questions, [Answer] is NOT ALLOWED until the last clip. See "SPECIAL QUESTION TYPES" below.
+- **EXCEPTION**: For counting questions, direct answer is NOT ALLOWED until the last clip. See "SPECIAL QUESTION TYPES" below.
 
-2. **Search next video ([Search])** when:
+2. **Search next video** (answer=False) when:
    - The current video AND previous summaries together are still missing critical information
    - The answer requires events that occur in clips not yet watched
    - The information is ambiguous or unclear even when combining current video with previous summaries
    - The video shows partial information but key details are still missing after considering previous summaries
-- **REQUIRED**: For counting questions, you MUST use [Search] for all clips except the last clip. See "SPECIAL QUESTION TYPES" below.
+- **REQUIRED**: For counting questions, you MUST continue searching for all clips except the last clip. See "SPECIAL QUESTION TYPES" below.
 
-**OUTPUT FORMAT**:
-Action: [Answer] or [Search]
-Content: <your answer here> or <summary of what the video shows>
-
-If Action is [Answer]:
-- Provide a concise, direct answer in ONE SENTENCE based on the current video and/or previous summaries.
-- Be brief and to the point. Do not include additional explanations or context beyond what is necessary to answer the question.
-
-If Action is [Search]:
-- Provide a summary describing what the current video shows. This summary will be passed to the next video clip.
-- MUST include the current clip ID in your summary.
-- Focus on key events, characters, objects, or actions that might be relevant for answering the question.
+Output should include: 
+1. answer: True or False
+2. content: <your answer here> or [clip_id1, clip_id2, ...]
+3. summary: <only present when answer is False - summary of extracted information from the current video>
 
 **SPECIAL QUESTION TYPES**:
 1. **Spatial/Location Questions** (questions asking "where", "which place", or about object placement):
@@ -783,9 +789,9 @@ If Action is [Search]:
 - Summary format: Clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." List events in chronological order.
 
 3. **Counting Questions** (questions asking "how many", "how many times", "how many pieces", "how many kinds"):
-- CRITICAL: You MUST watch ALL provided video clips (up to 5 clips) to ensure accurate counting. Do NOT answer early even if you see some occurrences - you must continue to [Search] through all clips to get the complete count.
-- [Answer] is NOT ALLOWED for counting questions.
-- [Search] is ALWAYS used for counting questions until you reach the last clip. Continue searching through all clips, explicitly listing each occurrence observed.
+- CRITICAL: You MUST watch ALL provided video clips (up to 5 clips) to ensure accurate counting. Do NOT answer early even if you see some occurrences - you must continue searching through all clips to get the complete count.
+- Direct answer is NOT ALLOWED for counting questions before the last clip.
+- `answer=False` is ALWAYS used for counting questions until you reach the last clip. Continue searching through all clips, explicitly listing each occurrence observed.
 - Summary format: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [event] occurred [count] time(s)." Example: "In clip 8, the remote was used once; in clip 11, the remote was used once."
 
 Examples:
@@ -795,40 +801,50 @@ Current clip ID: 9
 Previous summaries: Clip 8: Lucky reads a book in the bedroom.
 Video shows: Lucky placing the book on the bedside table
 Output:
-Action: [Answer]
-Content: The book is on the bedside table.
+VideoOutputFormat(
+  answer=True,
+  content="The book is on the bedside table."
+)
 
 Question: Where is the book Lucky read just now?
 Current clip ID: 9
 Previous summaries: Clip 8: Lucky reads a book in the bedroom.
 Video shows: Lucky placing the book, but the specific furniture is not clearly visible
 Output:
-Action: [Search]
-Content: In clip 9, Lucky places the book in the bedroom, but the specific location (which furniture or surface) is not clearly visible in this clip.
+VideoOutputFormat(
+  answer=False,
+  content="In clip 9, Lucky places the book in the bedroom, but the specific location (which furniture or surface) is not clearly visible in this clip."
+)
 
 Question: What happened after Alice received the gift?
 Current clip ID: 17
 Previous summaries: Clip 15: Bob gives Alice a wrapped gift box. Clip 16: Alice unwraps the gift and sees it's a book.
 Video shows: Alice reading the book and thanking Bob
 Output:
-Action: [Answer]
-Content: After receiving the gift, Alice unwrapped it, read the book, and thanked Bob.
+VideoOutputFormat(
+  answer=True,
+  content="After receiving the gift, Alice unwrapped it, read the book, and thanked Bob."
+)
 
 Question: Should the balloons be put up first?
 Current clip ID: 10
 Previous summaries: None (first clip)
 Video shows: Betty instructing to put up balloons, but the instruction doesn't specify the order
 Output:
-Action: [Search]
-Content: In clip 10, Betty instructs to put up balloons, but the instruction does not clearly specify whether balloons should be put up first or if other steps should come before.
+VideoOutputFormat(
+  answer=False,
+  content="In clip 10, Betty instructs to put up balloons, but the instruction does not clearly specify whether balloons should be put up first or if other steps should come before."
+)
 
 Question: How many times was the air-conditioning remote used?
 Current clip ID: 11
 Previous summaries: Clip 8: The air-conditioning remote was used once. Clip 9: No remote usage. Clip 10: No remote usage.
 Video shows: Robot uses the air-conditioning remote once
 Output:
-Action: [Search]
-Content: In clip 11, the air-conditioning remote was used once. Total so far: clip 8 (once), clip 11 (once). Need to verify if this is the last clip.
+VideoOutputFormat(
+  answer=False,
+  content="In clip 11, the air-conditioning remote was used once. Total so far: clip 8 (once), clip 11 (once). Need to verify if this is the last clip."
+)
 """
 
 

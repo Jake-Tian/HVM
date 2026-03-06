@@ -4,6 +4,7 @@ import numpy as np
 from .node_class import CharacterNode, ObjectNode
 from .edge_class import Edge
 from .conversation import Conversation
+from .output_structure import ConversationSummary
 from collections import defaultdict
 from utils.prompts import prompt_character_summary, prompt_character_relationships, prompt_conversation_summary
 from utils.llm import generate_text_response, get_embedding, get_multiple_embeddings
@@ -49,78 +50,88 @@ class HeteroGraph:
     
     def rename_character(self, old_name, new_name):
         """
-        Rename a character and update all references throughout the graph.
-        
-        This function:
-        1. Updates the character's name in self.characters
-        2. Updates all edges where this character appears as source or target
-        3. Updates adjacency lists accordingly
-        
-        Args:
-            old_name: Current character name in format <character_X> (e.g., "<character_1>")
-            new_name: New character name as plain text without angle brackets (e.g., "Alice")
-                     Will be stored in graph as "<Alice>"
-        
+        Rename/merge a placeholder character and update all references throughout the graph.
+
+        Behavior:
+        1. old_name must be an existing placeholder in <character_X> format.
+        2. new_name can be provided either as "<name>" or "name" (stored as "<name>").
+        3. If new_name exists, merge old_name into new_name by redirecting all connected edges.
+        4. If new_name does not exist, create a new CharacterNode and redirect edges.
+        5. Remove old_name from character table and adjacency lists.
+
         Returns:
-            bool: True if rename was successful, False if old_name not found, not in <character_X> format, or new_name already exists
+            bool: True if successful, False for invalid/missing old_name.
         """
         # Ensure old_name has angle brackets
         if not old_name.startswith("<") or not old_name.endswith(">"):
             old_name = f"<{old_name}>"
-        
+
         # Remove angle brackets from new_name if present, then add them for storage
         new_name_plain = new_name.strip("<>")
         new_name_stored = f"<{new_name_plain}>"
-        
+
         # Check if old character exists
         if old_name not in self.characters:
             return False
-        
+
         # Validate that old_name is in <character_X> format
-        # Check if old_name matches <character_X> pattern where X is a number
         if not re.match(r'^<character_\d+>$', old_name):
             return False  # Only <character_X> format can be renamed
-        
-        # Check if new name already exists (and it's not the same character)
-        if new_name_stored in self.characters and new_name_stored != old_name:
-            return False
-        
-        # Get the character node
-        character = self.characters[old_name]
-        
-        # 1. Update character's name property
-        character.name = new_name_stored
-        
-        # 2. Move character in self.characters dictionary
-        del self.characters[old_name]
-        self.characters[new_name_stored] = character
-        
-        # 3. Update edges where this character appears as source or target
-        # Collect all edges connected to this character
+
+        # No-op rename
+        if old_name == new_name_stored:
+            return True
+
+        old_character = self.characters[old_name]
+
+        # Ensure destination node exists.
+        if new_name_stored not in self.characters:
+            self.characters[new_name_stored] = CharacterNode(
+                new_name_stored,
+                embedding=getattr(old_character, "embedding", None),
+            )
+
+        # Update edges where this character appears as source or target.
         all_edge_ids = set(self.adjacency_list_out.get(old_name, [])) | set(self.adjacency_list_in.get(old_name, []))
-        
+
         for edge_id in all_edge_ids:
             edge = self.edges.get(edge_id)
             if edge is None:
                 continue
-            
-            # Update source if it matches old_name
             if edge.source == old_name:
                 edge.source = new_name_stored
-            # Update target if it matches old_name
             if edge.target == old_name:
                 edge.target = new_name_stored
-        
-        # 4. Update adjacency lists
-        # Move edge IDs from old_name to new_name_stored in both adjacency lists
-        if old_name in self.adjacency_list_out:
-            edge_ids_out = self.adjacency_list_out.pop(old_name)
-            self.adjacency_list_out[new_name_stored] = edge_ids_out
-        
-        if old_name in self.adjacency_list_in:
-            edge_ids_in = self.adjacency_list_in.pop(old_name)
-            self.adjacency_list_in[new_name_stored] = edge_ids_in
-        
+
+        # Merge adjacency lists (keep unique edge IDs).
+        old_out = self.adjacency_list_out.pop(old_name, [])
+        old_in = self.adjacency_list_in.pop(old_name, [])
+        self.adjacency_list_out[new_name_stored] = list(
+            set(self.adjacency_list_out.get(new_name_stored, [])) | set(old_out)
+        )
+        self.adjacency_list_in[new_name_stored] = list(
+            set(self.adjacency_list_in.get(new_name_stored, [])) | set(old_in)
+        )
+
+        # Update conversation speakers/messages.
+        for conversation in self.conversations.values():
+            if conversation is None:
+                continue
+            # Update message speaker field: [speaker, content, clip_id, embedding]
+            for msg in conversation.messages:
+                if isinstance(msg, list) and len(msg) >= 1 and msg[0] == old_name:
+                    msg[0] = new_name_stored
+            # Keep speakers set in sync
+            if hasattr(conversation, "speakers") and isinstance(conversation.speakers, set):
+                if old_name in conversation.speakers:
+                    conversation.speakers.discard(old_name)
+                    conversation.speakers.add(new_name_stored)
+
+        # Remove old character node after rewiring.
+        del self.characters[old_name]
+
+        print(f"Renamed character: {old_name} -> {new_name_stored}")
+
         return True
     
     def get_node_degrees(self):
@@ -245,7 +256,7 @@ class HeteroGraph:
     # --------------------------------------------------------
     # Edge API
     # --------------------------------------------------------
-    def _find_existing_high_level_edge(self, source, content, target, clip_id=0):
+    def _find_existing_high_level_edge(self, source, content, target, clip_id=0, scene=None):
         """
         Find an existing high-level edge that matches the given parameters exactly.
         Note: "Anna friends with Susan" and "Susan friends with Anna" are treated as different edges.
@@ -254,14 +265,17 @@ class HeteroGraph:
             source: Source node name
             content: Edge content (attribute or relationship)
             target: Target node name (None for attributes)
-            clip_id: Clip ID (should be 0 for high-level edges)
+            clip_id: Clip ID (should be 0 for high-level/appearance edges)
+            scene: Edge scene namespace ("high-level" or "appearance")
         
         Returns:
             Edge object if found, None otherwise
         """
-        # Only check high-level edges (clip_id=0, scene=None)
+        # Only check high-level namespaces at clip_id=0.
         for edge_id, edge in self.edges.items():
-            if edge.clip_id != clip_id or edge.scene is not None:
+            if edge.clip_id != clip_id:
+                continue
+            if edge.scene != scene:
                 continue
             
             # Check if content matches
@@ -337,17 +351,22 @@ class HeteroGraph:
         Returns:
             edge.id if added/updated, None if skipped
         """
-        # Only process high-level edges
+        # Only process high-level namespaces
         if edge.clip_id != 0:
             # For non-high-level edges, use regular add_edge
             return self.add_edge(edge)
+
+        # Normalize namespace for high-level edges.
+        if edge.scene is None:
+            edge.scene = "high-level"
         
         # Check if edge already exists
         existing_edge = self._find_existing_high_level_edge(
             source=edge.source,
             content=edge.content,
             target=edge.target,
-            clip_id=edge.clip_id
+            clip_id=edge.clip_id,
+            scene=edge.scene,
         )
         
         if existing_edge:
@@ -427,7 +446,7 @@ class HeteroGraph:
         
         return None
     
-    def insert_triples(self, triples, clip_id, scene, character_appearance=None):
+    def insert_triples(self, triples, clip_id, scene):
         """
         Insert triples into the graph.
         
@@ -435,33 +454,31 @@ class HeteroGraph:
             triples: List of triples, each triple is [source, edge_content, target]
             clip_id: ID of the clip these triples belong to
             scene: Scene name for these triples
-            character_appearance: Dictionary mapping character names to appearance descriptions.
-                                 Used to match and merge duplicate characters. Will be modified in-place
-                                 if characters are merged.
+            character_appearance: Kept for backward compatibility; not used for matching.
         
         Rules:
         1. Each triple: [source, edge_content, target]
         2. Elements with angle brackets <> are character nodes, otherwise object nodes
         3. Character nodes are created when first encountered in triples
-        4. If character doesn't exist, compare appearance with existing characters
-        5. If appearance matches a <character_X> (not named character), remove that character and use its name
-        6. Uniqueness of object nodes is determined by name only
-        7. Don't insert duplicate edges in the same list
+        4. Uniqueness of object nodes is determined by name only
+        5. Don't insert duplicate edges in the same list
         """
         if not triples:
             return
         
-        # Parse character_appearance if it's a JSON string
-        if isinstance(character_appearance, str):
-            try:
-                character_appearance = json.loads(character_appearance)
-            except:
-                character_appearance = {}
-        
         # Track inserted edges to avoid duplicates within the same list
         # Use (source, target, content) as the key
         seen_edges = set()
-        
+        parsed_edges = []
+
+        # Compute scene embedding once per clip.
+        scene_embedding = None
+        if scene is not None and str(scene).strip():
+            try:
+                scene_embedding = get_embedding(str(scene))
+            except Exception as e:
+                print(f"Warning: failed to generate scene embedding for clip {clip_id}: {e}")
+
         for triple in triples:
             if not isinstance(triple, list) or len(triple) < 3:
                 continue
@@ -474,25 +491,21 @@ class HeteroGraph:
             if source_str is None:
                 continue
             
-            # Skip if edge content is None/null or empty
-            if edge_content is None or (isinstance(edge_content, str) and not edge_content.strip()):
+            # Normalize edge content to string and skip empty/null values.
+            if edge_content is None:
+                continue
+            edge_content = str(edge_content).strip()
+            if not edge_content:
                 continue
             
             # Parse source node
             is_char_src, src_name = self._parse_node_string(source_str)
             
             if is_char_src:
-                # Source is a character - create if doesn't exist, or match and merge
+                # Source is a character - create if doesn't exist
                 if src_name not in self.characters:
-                    # Try to match with existing characters
-                    matched_name = self._match_and_merge_character(src_name, character_appearance)
-                    if matched_name:
-                        # Use the matched name (which is the same as src_name after merge)
-                        source_node_name = src_name
-                    else:
-                        # No match found, create new character
-                        self.add_character(src_name)
-                        source_node_name = src_name
+                    self.add_character(src_name)
+                    source_node_name = src_name
                 else:
                     source_node_name = src_name
             else:
@@ -507,17 +520,10 @@ class HeteroGraph:
                 is_char_tgt, tgt_name = self._parse_node_string(target_str)
                 
                 if is_char_tgt:
-                    # Target is a character - create if doesn't exist, or match and merge
+                    # Target is a character - create if doesn't exist
                     if tgt_name not in self.characters:
-                        # Try to match with existing characters
-                        matched_name = self._match_and_merge_character(tgt_name, character_appearance)
-                        if matched_name:
-                            # Use the matched name (which is the same as tgt_name after merge)
-                            target_node_name = tgt_name
-                        else:
-                            # No match found, create new character
-                            self.add_character(tgt_name)
-                            target_node_name = tgt_name
+                        self.add_character(tgt_name)
+                        target_node_name = tgt_name
                     else:
                         target_node_name = tgt_name
                 else:
@@ -530,11 +536,44 @@ class HeteroGraph:
                 continue  # Skip duplicate
             
             seen_edges.add(edge_key)
-            
-            # Create and add edge
-            # Only compute scene_embedding if scene is not None (high-level edges from conversation summaries have scene=None)
-            scene_embedding = get_embedding(scene) if scene is not None else None
-            edge = Edge(clip_id=clip_id, source=source_node_name, target=target_node_name, content=edge_content, scene=scene, scene_embedding=scene_embedding)
+
+            parsed_edges.append((source_node_name, target_node_name, edge_content, triple))
+
+        if not parsed_edges:
+            return
+
+        # Batch-insert edge content embeddings for this clip only.
+        edge_contents = [item[2] for item in parsed_edges]
+        edge_embeddings = [None] * len(parsed_edges)
+        try:
+            batch_embeddings = get_multiple_embeddings(edge_contents)
+            if len(batch_embeddings) == len(edge_embeddings):
+                edge_embeddings = batch_embeddings
+            else:
+                print(
+                    f"Warning: embedding batch size mismatch in clip {clip_id}: "
+                    f"expected {len(edge_embeddings)}, got {len(batch_embeddings)}"
+                )
+        except Exception as e:
+            print(f"Warning: batch edge embedding insertion failed for clip {clip_id}: {e}")
+
+        # Create and add edges (fallback to per-edge embedding where needed).
+        for (source_node_name, target_node_name, edge_content, triple), edge_embedding in zip(parsed_edges, edge_embeddings):
+            if edge_embedding is None:
+                try:
+                    edge_embedding = get_embedding(edge_content)
+                except Exception as e:
+                    print(f"Warning: failed to embed edge content '{edge_content}' in clip {clip_id}: {e}")
+
+            edge = Edge(
+                clip_id=clip_id,
+                source=source_node_name,
+                target=target_node_name,
+                content=edge_content,
+                scene=scene,
+                embedding=edge_embedding,
+                scene_embedding=scene_embedding,
+            )
             try:
                 self.add_edge(edge)
             except ValueError as e:
@@ -643,6 +682,84 @@ class HeteroGraph:
         for edge, embedding in zip(self.edges.values(), embeddings):
             edge.embedding = embedding
         print(len(embeddings), "edge embeddings inserted")
+
+    def insert_high_level_and_appearance_embeddings(self, batch_size=512):
+        """
+        Insert/update embeddings for high-level and appearance edges together.
+        Processes both namespaces in one combined embedding pass with batching.
+        """
+        target_edges = [
+            edge for edge in self.edges.values()
+            if edge.clip_id == 0 and edge.scene in {"high-level", "appearance"}
+        ]
+        if not target_edges:
+            print("No high-level/appearance edges found for embedding insertion")
+            return {"high-level": 0, "appearance": 0, "skipped": 0}
+
+        inserted_by_scene = {"high-level": 0, "appearance": 0}
+        skipped = 0
+
+        # Work in chunks to prevent oversized embedding requests.
+        for start in range(0, len(target_edges), batch_size):
+            chunk_edges = target_edges[start:start + batch_size]
+            chunk_texts = []
+            chunk_indices = []
+
+            for idx, edge in enumerate(chunk_edges):
+                if edge.content is None:
+                    skipped += 1
+                    continue
+                text = str(edge.content).strip()
+                if not text:
+                    skipped += 1
+                    continue
+                chunk_texts.append(text)
+                chunk_indices.append(idx)
+
+            if not chunk_texts:
+                continue
+
+            try:
+                chunk_embeddings = get_multiple_embeddings(chunk_texts)
+                if len(chunk_embeddings) != len(chunk_texts):
+                    print(
+                        "Warning: high-level/appearance embedding batch size mismatch "
+                        f"(expected {len(chunk_texts)}, got {len(chunk_embeddings)})"
+                    )
+                for local_i, embedding in enumerate(chunk_embeddings):
+                    if local_i >= len(chunk_indices):
+                        break
+                    edge = chunk_edges[chunk_indices[local_i]]
+                    edge.embedding = embedding
+                    if edge.scene in inserted_by_scene:
+                        inserted_by_scene[edge.scene] += 1
+            except Exception as e:
+                print(
+                    "Warning: failed batch embedding insertion for high-level/appearance "
+                    f"edges [{start}:{start + len(chunk_edges)}]: {e}"
+                )
+                # Fallback to single edge embedding to salvage progress.
+                for idx in chunk_indices:
+                    edge = chunk_edges[idx]
+                    try:
+                        edge.embedding = get_embedding(str(edge.content).strip())
+                        if edge.scene in inserted_by_scene:
+                            inserted_by_scene[edge.scene] += 1
+                    except Exception as e2:
+                        skipped += 1
+                        print(f"Warning: failed embedding for {edge.scene} edge '{edge.content}': {e2}")
+
+        total_inserted = inserted_by_scene["high-level"] + inserted_by_scene["appearance"]
+        print(
+            f"{total_inserted} high-level/appearance edge embeddings inserted "
+            f"(high-level={inserted_by_scene['high-level']}, "
+            f"appearance={inserted_by_scene['appearance']}, skipped={skipped})"
+        )
+        return {
+            "high-level": inserted_by_scene["high-level"],
+            "appearance": inserted_by_scene["appearance"],
+            "skipped": skipped,
+        }
     
     def node_embedding_insertion(self):
         """
@@ -705,7 +822,7 @@ class HeteroGraph:
             character_name: Character name (with or without angle brackets, e.g., "<Alice>" or "Alice")
         
         Returns:
-            dict: Dictionary of attributes with confidence scores
+            int: Token usage for this LLM call
         """
         # Ensure character name has angle brackets for lookup
         if not character_name.startswith("<") or not character_name.endswith(">"):
@@ -719,8 +836,9 @@ class HeteroGraph:
         edge_ids = self.edges_of(character_name)
         
         if not edge_ids:
-            # No edges found, return empty dictionary
-            return {}
+            # No edges found, no LLM call made
+            print(f"Info: Skip character_attributes for {character_name}: no connected edges.")
+            return 0
         
         # Format edges as strings (one per line)
         edge_lines = []
@@ -743,10 +861,10 @@ class HeteroGraph:
         # Create the full prompt with proper string formatting
         full_prompt = f"Character: {character_name}\n\nCharacter behaviors (from graph edges):\n{edges_text}\n{prompt_character_summary}"
         try:
-            attributes_response = generate_text_response(full_prompt)
+            attributes_response, tokens = generate_text_response(full_prompt)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
-            attributes_response = generate_text_response(full_prompt)
+            attributes_response, tokens = generate_text_response(full_prompt)
         
         # Parse the LLM response
         attributes_response = strip_code_fences(attributes_response)
@@ -755,7 +873,7 @@ class HeteroGraph:
         except json.JSONDecodeError as e:
             print(f"Failed to parse LLM response as JSON: {e}")
             print(f"Response was: {attributes_response}")
-            return {}
+            return int(tokens or 0)
         
         # Create edges for each attribute
         for attribute_name, confidence in attributes_dict.items():
@@ -768,15 +886,18 @@ class HeteroGraph:
                 source=character_name,
                 target=None,
                 content=attribute_name,
-                scene=None,
+                scene="high-level",
                 confidence=confidence
             )
             try:
                 self.add_high_level_edge(edge)
             except Exception as e:
-                pass
+                print(
+                    f"Warning: Failed to add high-level attribute edge for {character_name} "
+                    f"(attribute='{attribute_name}', confidence={confidence}): {e}"
+                )
         
-        return attributes_dict
+        return int(tokens or 0)
 
     def character_relationships(self, character1, character2):
         """
@@ -794,7 +915,7 @@ class HeteroGraph:
             character2: Second character name (with or without angle brackets, e.g., "<Bob>" or "Bob")
         
         Returns:
-            list: List of relationship tuples [character1, relationship, character2, confidence]
+            int: Token usage for this LLM call
         """
         # Normalize character names (add angle brackets if needed)
         if not character1.startswith("<") or not character1.endswith(">"):
@@ -812,7 +933,11 @@ class HeteroGraph:
         connected_edges = self.get_connected_edges(character1, character2)
         
         if not connected_edges or len(connected_edges) < 3:
-            return []
+            print(
+                f"Info: Skip character_relationships for {character1}, {character2}: "
+                f"insufficient connected edges ({len(connected_edges) if connected_edges else 0} < 3)."
+            )
+            return 0
         
         # Format edges as strings (one per line)
         edge_lines = []
@@ -831,11 +956,11 @@ class HeteroGraph:
         # Create the full prompt with proper string formatting
         full_prompt = f"Character 1: {character1}\nCharacter 2: {character2}\n\nCharacter interactions (from graph edges):\n{edges_text}\n{prompt_character_relationships}"
         try:
-            relationships_response = generate_text_response(full_prompt)
+            relationships_response, tokens = generate_text_response(full_prompt)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
-            relationships_response = generate_text_response(full_prompt)
-        
+            relationships_response, tokens = generate_text_response(full_prompt)
+
         # Parse the LLM response
         relationships_response = strip_code_fences(relationships_response)
         try:
@@ -843,7 +968,7 @@ class HeteroGraph:
         except json.JSONDecodeError as e:
             print(f"Failed to parse LLM response as JSON: {e}")
             print(f"Response was: {relationships_response}")
-            return []
+            return int(tokens or 0)
         
         # Validate and create edges for each relationship
         relationships_created = []
@@ -874,7 +999,7 @@ class HeteroGraph:
                     source=rel_char1,
                     target=rel_char2,
                     content=relationship,
-                    scene=None,
+                    scene="high-level",
                     confidence=confidence
                 )
                 try:
@@ -884,26 +1009,10 @@ class HeteroGraph:
                     print(f"Failed to add relationship edge: {e}")
                     pass
         
-        return relationships_created
+        return int(tokens or 0)
 
     def extract_conversation_summary(self, conversation_id):
-        """
-        Extract abstract information from a conversation.
-        
-        This function:
-        1. Gets the conversation from self.conversations
-        2. Transforms messages into formatted string
-        3. Combines with prompt_conversation_summary
-        4. Uses LLM to generate abstract information (summary, attributes, relationships)
-        5. Updates conversation.summary
-        6. Inserts attributes and relationships as edges in the graph
-        
-        Args:
-            conversation_id: ID of the conversation to process
-        
-        Returns:
-            dict: Dictionary with keys "summary", "character_attributes", "characters_relationships"
-        """
+
         # Get the conversation
         conversation = self.conversations.get(conversation_id)
         if conversation is None:
@@ -915,39 +1024,37 @@ class HeteroGraph:
                 "summary": "",
                 "character_attributes": [],
                 "characters_relationships": []
-            }
+            }, 0
         
         # Transform messages into formatted string
         formatted_messages = conversation.format_messages()
         
         # Combine with prompt
-        full_prompt = f"Conversation:\n{formatted_messages}\n\n{prompt_conversation_summary}"
+        full_prompt = prompt_conversation_summary + "\n" + formatted_messages
         
-        # Call LLM
+        # Call LLM with structured output
         try:
-            response = generate_text_response(full_prompt)
+            response, tokens = generate_text_response(full_prompt, text_format=ConversationSummary)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
-            response = generate_text_response(full_prompt)
-        
-        # Parse the LLM response
-        response = strip_code_fences(response)
-        # print(response)
-        try:
-            result_dict = json.loads(response)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response as JSON: {e}")
-            print(f"Response was: {response}")
-            return {
-                "summary": "",
-                "character_attributes": [],
-                "characters_relationships": []
-            }
-        
+            response, tokens = generate_text_response(full_prompt, text_format=ConversationSummary)
+
+        # If parser fallback returned raw text, parse to structured object.
+        if isinstance(response, str):
+            try:
+                response = ConversationSummary.model_validate_json(strip_code_fences(response))
+            except Exception as e:
+                print(f"Failed to parse conversation summary response: {e}")
+                return {
+                    "summary": "",
+                    "character_attributes": [],
+                    "characters_relationships": []
+                }, int(tokens or 0)
+
         # Extract the three components
-        summary = result_dict.get("summary", "")
-        character_attributes = result_dict.get("character_attributes", [])
-        characters_relationships = result_dict.get("characters_relationships", [])
+        summary = response.summary
+        character_attributes = response.character_attributes
+        characters_relationships = response.characters_relationships
         
         # Update conversation.summary
         conversation.summary = summary
@@ -976,13 +1083,13 @@ class HeteroGraph:
                 self.add_character(char_name)
                 print(f"Info: Added character '{char_name}' to graph from conversation summary")
             
-            # Create attribute edge (high-level edge: clip_id=0, scene=None)
+            # Create attribute edge (high-level edge: clip_id=0, scene="high-level")
             edge = Edge(
                 clip_id=0,
                 source=char_name,
                 target=None,
                 content=attribute,
-                scene=None,
+                scene="high-level",
                 confidence=confidence
             )
             try:
@@ -1020,13 +1127,13 @@ class HeteroGraph:
                 self.add_character(char2)
                 print(f"Info: Added character '{char2}' to graph from conversation summary")
             
-            # Create relationship edge (high-level edge: clip_id=0, scene=None)
+            # Create relationship edge (high-level edge: clip_id=0, scene="high-level")
             edge = Edge(
                 clip_id=0,
                 source=char1,
                 target=char2,
                 content=relationship,
-                scene=None,
+                scene="high-level",
                 confidence=confidence
             )
             try:
@@ -1038,7 +1145,7 @@ class HeteroGraph:
             "summary": summary,
             "character_attributes": character_attributes,
             "characters_relationships": characters_relationships
-        }
+        }, int(tokens or 0)
     
     def insert_character_appearances(self, character_appearance):
         """
@@ -1087,14 +1194,14 @@ class HeteroGraph:
             appearance_features = [feature.strip() for feature in appearance_str.split(",") if feature.strip()]
             
             for feature in appearance_features:
-                # Create appearance edge (high-level edge: clip_id=0, scene=None)
+                # Create appearance edge (clip_id=0, scene="appearance")
                 # Each feature becomes a separate edge with format: "<feature>"
                 edge = Edge(
                     clip_id=0,
                     source=char_name,
                     target=None,
                     content=f"{feature}",
-                    scene=None,
+                    scene="appearance",
                     confidence=100  # Appearance is factual, so high confidence
                 )
                 try:
@@ -1280,8 +1387,9 @@ class HeteroGraph:
     
     def search_high_level_edges(self, query_triples, k):
         """
-        Search for top-k high-level edges (clip_id=0, scene=None) using embedding-based similarity.
-        High-level edges represent character attributes and relationships.
+        Search for top-k high-level edges (clip_id=0, scene="high-level")
+        using embedding-based similarity.
+        High-level edges represent character attributes and relationships only.
         
         Args:
             query_triples: List of query triples in format [source, content, target, source_weight, content_weight, target_weight] or single triple
@@ -1290,7 +1398,7 @@ class HeteroGraph:
         Returns:
             list: List of Edge objects, sorted by relevance (embedding similarity + confidence)
         """
-        if not query_triples:
+        if not query_triples or k <= 0:
             return []
         
         # Normalize query_triples to list of lists
@@ -1301,10 +1409,10 @@ class HeteroGraph:
         if isinstance(query_triples[0], str):
             query_triples = [query_triples]
         
-        # Filter high-level edges (clip_id=0, scene=None)
+        # Filter high-level namespace only (exclude appearance).
         candidate_edges = []
         for edge_id, edge in self.edges.items():
-            if edge.clip_id == 0 and edge.scene is None:
+            if edge.clip_id == 0 and edge.scene == "high-level":
                 candidate_edges.append(edge)
         
         if not candidate_edges:
@@ -1375,6 +1483,118 @@ class HeteroGraph:
             scored_edges.append((score, edge))
         
         # Sort by score (descending) and return top-k
+        scored_edges.sort(key=lambda x: x[0], reverse=True)
+        return [edge for _, edge in scored_edges[:k]]
+
+    def _compute_appearance_edge_similarity(self, edge, query_triple, query_embeddings):
+        """
+        Compute similarity between an appearance edge and query triple.
+        Appearance edges always have source=character and target=None, so only
+        source/content terms are used (no target matching and no reverse direction).
+        """
+        if edge is None:
+            return 0.0
+        if query_triple is None or not isinstance(query_triple, (list, tuple)) or len(query_triple) < 6:
+            return 0.0
+        if query_embeddings is None or not isinstance(query_embeddings, (list, tuple)) or len(query_embeddings) < 3:
+            return 0.0
+
+        q_source = query_triple[0]
+        q_content = query_triple[1]
+        q_source_weight = query_triple[3] if query_triple[3] is not None else 1.0
+        q_content_weight = query_triple[4] if query_triple[4] is not None else 1.0
+
+        source_emb = query_embeddings[0]
+        content_emb = query_embeddings[1]
+
+        source_sim = 0.0
+        if q_source and q_source != "?" and edge.source is not None:
+            edge_source_emb = self._get_node_embedding(edge.source)
+            source_sim = self._calculate_node_similarity(q_source, edge.source, source_emb, edge_source_emb) * q_source_weight
+
+        content_sim = 0.0
+        if q_content and q_content != "?" and edge.content and content_emb is not None:
+            if edge.embedding is not None:
+                try:
+                    content_sim = self._cosine_similarity(content_emb, edge.embedding) * q_content_weight
+                except Exception:
+                    if edge.content == q_content:
+                        content_sim = q_content_weight
+
+        return source_sim + content_sim
+
+    def search_appearance_edges(self, query_triples, k):
+        """
+        Search for top-k appearance edges (clip_id=0, scene="appearance").
+        Appearance edges are source=character, target=None and content=appearance descriptor.
+        """
+        if not query_triples or k <= 0:
+            return []
+
+        query_triples = [q for q in query_triples if q is not None]
+        if not query_triples:
+            return []
+        if isinstance(query_triples[0], str):
+            query_triples = [query_triples]
+
+        candidate_edges = []
+        for edge_id, edge in self.edges.items():
+            if edge.clip_id == 0 and edge.scene == "appearance":
+                candidate_edges.append(edge)
+
+        if not candidate_edges:
+            return []
+
+        # Reuse the same query embeddings shape [source_emb, content_emb, target_emb].
+        query_triple_embeddings = []
+        for q_triple in query_triples:
+            if q_triple is None:
+                query_triple_embeddings.append([None, None, None])
+                continue
+
+            q_source = q_triple[0] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 0 else None
+            q_content = q_triple[1] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 1 else None
+
+            source_emb = None
+            if q_source and q_source != "?" and isinstance(q_source, str):
+                source_for_emb = q_source.strip("<>") if q_source.startswith("<") and q_source.endswith(">") else q_source
+                source_emb = get_embedding(source_for_emb)
+
+            content_emb = None
+            if q_content and q_content != "?" and isinstance(q_content, str):
+                content_emb = get_embedding(q_content)
+
+            query_triple_embeddings.append([source_emb, content_emb, None])
+
+        scored_edges = []
+        for edge in candidate_edges:
+            score = 0.0
+
+            for i, q_triple in enumerate(query_triples):
+                if q_triple is None:
+                    continue
+
+                q_source_weight = q_triple[3] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 3 and q_triple[3] is not None else 1.0
+                q_content_weight = q_triple[4] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 4 and q_triple[4] is not None else 1.0
+
+                query_triple_with_weights = [
+                    q_triple[0] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 0 else None,
+                    q_triple[1] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 1 else None,
+                    None,
+                    q_source_weight,
+                    q_content_weight,
+                    0.0,
+                ]
+
+                query_embeddings = query_triple_embeddings[i]
+                triple_score = self._compute_appearance_edge_similarity(edge, query_triple_with_weights, query_embeddings)
+                score = max(score, triple_score)
+
+            if hasattr(edge, "confidence") and edge.confidence:
+                score += edge.confidence / 100.0 * 0.3
+
+            scored_edges.append((score, edge))
+
         scored_edges.sort(key=lambda x: x[0], reverse=True)
         return [edge for _, edge in scored_edges[:k]]
     

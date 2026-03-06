@@ -1,25 +1,76 @@
 # HiViM-simple
 
-Video processing pipeline for building episodic and semantic memory from video frames.
+Pipeline for building graph memory from videos and answering QA with graph + video reasoning.
 
 ## Quick Start
 
-1. **Extract frames with subtitles:**
+1. **Install dependencies**
    ```bash
-   python preprocessing/add_subtitles_and_extract_frames.py
+   pip install -r requirements.txt
    ```
 
-2. **Process videos to build memory:**
+2. **Set API credentials**
+   - Ensure the required OpenAI/HF credentials are available in your environment.
+
+3. **Run the full pipeline**
    ```bash
-   python process_full_video.py 1-20  # Process first 20 videos
+   bash run_video_pipeline.sh
    ```
+   - Uses `video_list.txt` by default.
+   - You can also pass specific video names:
+     ```bash
+     bash run_video_pipeline.sh part1 part2
+     ```
 
-## Structure
+## What `run_video_pipeline.sh` does
 
-- `preprocessing/` - Video processing and frame extraction
-- `classes/` - Graph data structures (characters, objects, edges)
-- `utils/` - LLM/MLLM utilities and prompts
-- `data/frames/` - Extracted video frames
-- `data/episodic_memory/` - Generated episodic memory JSON files
-- `data/semantic_memory/` - Generated graph pickle files
+1. Download shared data via `preprocessing/download_hf_folder.py`
+2. Download each video via `preprocessing/download_hf_videos.py`
+3. Build graph memory via `process_full_video.py`
+4. Run QA reasoning via `reason.py`
+5. Clean up downloaded MP4s and extracted frames
+
+## Outputs
+
+Per successfully processed video:
+- `data/graphs/<video>.pkl` (graph memory)
+- `data/memorization/<video>.json` (episodic memory + memory token summary)
+- `data/reasoning/<video>.json` (QA reasoning results)
+
+## Data Structure
+
+Expected layout in `data` (some folders are created/populated during pipeline runtime):
+
+```text
+data/
+├── frames/
+│   └── <video>/
+│       └── <clip_id>/
+│           └── *.jpg
+├── videos/
+│   └── <video>.mp4
+├── subtitles/
+│   └── robot/
+│       └── <video>.srt
+├── graphs/
+│   └── <video>.pkl
+├── memorization/
+│   └── <video>.json
+├── reasoning/
+│   └── <video>.json
+└── robot.json
+```
+
+Notes:
+- `frames/` and `videos/` are temporary runtime artifacts and are cleaned up by `run_video_pipeline.sh`.
+- `graphs/`, `memorization/`, and `reasoning/` are persistent outputs.
+
+## Project Structure
+
+- `preprocessing/` - dataset/video download and preprocessing
+- `classes/` - graph, node, edge, conversation data structures
+- `utils/` - prompts, search, LLM/MLLM helpers
+- `process_full_video.py` - build memory graph from frames
+- `reason.py` - answer questions from built graph + selected video clips
+- `run_video_pipeline.sh` - end-to-end pipeline runner
 

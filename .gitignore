@@ -7,6 +7,9 @@ __pycache__/
 
 # Data file
 data/
+!data/
+data/*
+!data/robot.json
 
 # Visualization output
 visualization/

@@ -1,14 +1,12 @@
 # python -m utils.search
 
-import json
 import pickle
-from pathlib import Path
 from classes.hetero_graph import HeteroGraph
-from utils.general import strip_code_fences
-from utils.reasoning.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
+from classes.output_structure import ParseQueryOutput
+from utils.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
 
 
-def search_with_parse(query, graph, parse_query_response, skip_high_level: bool = False):
+def search_with_parse(query, graph, parse_query_response):
     """
     Search the graph and return search results based on a parsed query.
     
@@ -21,43 +19,58 @@ def search_with_parse(query, graph, parse_query_response, skip_high_level: bool 
     Args:
         query: Natural language query string (used for conversation search)
         graph: HeteroGraph instance to search
-        parse_query_response: Raw output from prompt_parse_query (JSON string)
+        parse_query_response: Parsed output from prompt_parse_query
+            (typically ParseQueryOutput; may also be tuple(result, tokens))
     
     Returns:
         str: Formatted string containing all search results in natural language
     """
-    # Transfer the strategy into dictionary
-    try:
-        strategy_dict = json.loads(strip_code_fences(parse_query_response))
-    except json.JSONDecodeError as e:
-        raise Exception(f"Error parsing strategy JSON: {e}\nRaw strategy response: {parse_query_response}")
+    # Handle generate_text_response(...) outputs that may be (parsed_obj, tokens)
+    if isinstance(parse_query_response, tuple):
+        if len(parse_query_response) == 0:
+            raise ValueError("parse_query_response tuple is empty")
+        parse_query_response = parse_query_response[0]
 
-    # Extract strategy components with safe access
-    triple = strategy_dict.get("query_triple")
-    triples = strategy_dict.get("query_triples")
-    spatial_constraint = strategy_dict.get("spatial_constraint")
-    speaker_strict = strategy_dict.get("speaker_strict")
-    allocation = strategy_dict.get("allocation", {})
+    # ParseQueryOutput object (new expected format)
+    if isinstance(parse_query_response, ParseQueryOutput):
+        query_triples = parse_query_response.query_triples
+        spatial_constraint = parse_query_response.spatial_constraint
+        speaker_strict = parse_query_response.speaker_strict
+        k_high_level = parse_query_response.allocation.k_high_level
+        k_appearance = parse_query_response.allocation.k_appearance
+        k_low_level = parse_query_response.allocation.k_low_level
+        k_conversations = parse_query_response.allocation.k_conversations
+    # Backward compatibility for dict payloads
+    elif isinstance(parse_query_response, dict):
+        triple = parse_query_response.get("query_triple")
+        triples = parse_query_response.get("query_triples")
+        spatial_constraint = parse_query_response.get("spatial_constraint")
+        speaker_strict = parse_query_response.get("speaker_strict")
+        allocation = parse_query_response.get("allocation", {})
 
-    if triples and isinstance(triples, list):
-        query_triples = triples
-    elif triple:
-        query_triples = [triple]
+        if triples and isinstance(triples, list):
+            query_triples = triples
+        elif triple:
+            query_triples = [triple]
+        else:
+            raise ValueError("query_triple(s) not found in strategy")
+
+        k_high_level = allocation.get("k_high_level", 5)
+        k_appearance = allocation.get("k_appearance", 0)
+        k_low_level = allocation.get("k_low_level", 10)
+        k_conversations = allocation.get("k_conversations", 10)
     else:
-        raise ValueError("query_triple(s) not found in strategy")
-
-    # Get k values from allocation, with defaults as fallback
-    k_high_level = allocation.get("k_high_level", 10)
-    k_low_level = allocation.get("k_low_level", 10)
-    k_conversations = allocation.get("k_conversations", 10)
+        raise TypeError(
+            "parse_query_response must be ParseQueryOutput, dict, or tuple(parsed, tokens). "
+            f"Got: {type(parse_query_response).__name__}"
+        )
 
     # Search the graph
     try:
-        # Search high-level edges (skip when ablation: no_highlevel)
-        if skip_high_level:
-            high_level_edges = []
-        else:
-            high_level_edges = graph.search_high_level_edges(query_triples, k_high_level)
+        # Search in two independent parts with separate k budgets.
+        high_level_edges = graph.search_high_level_edges(query_triples, max(0, k_high_level))
+        print("High-level edges searched: ", len(high_level_edges))
+        appearance_edges = graph.search_appearance_edges(query_triples, max(0, k_appearance))
         
         # Search low-level edges
         low_level_edges = graph.search_low_level_edges(
@@ -65,6 +78,7 @@ def search_with_parse(query, graph, parse_query_response, skip_high_level: bool 
             k_low_level,
             spatial_constraint
         )
+        print("Low-level edges searched: ", len(low_level_edges))
         
         # Search conversations (use original query string)
         conversation_results = graph.search_conversations(
@@ -72,6 +86,7 @@ def search_with_parse(query, graph, parse_query_response, skip_high_level: bool 
             k_conversations,
             speaker_strict
         )
+        print("Conversations searched: ", len(conversation_results))
         
     except Exception as e:
         raise Exception(f"Error searching graph: {e}")
@@ -85,6 +100,14 @@ def search_with_parse(query, graph, parse_query_response, skip_high_level: bool 
         if high_level_str:
             result_sections.append("**High-Level Information (Character Attributes and Relationships): **\n")
             result_sections.append(high_level_str)
+            result_sections.append("")
+
+    # Format appearance edges
+    if appearance_edges:
+        appearance_str = high_level_edges_to_string(appearance_edges)
+        if appearance_str:
+            result_sections.append("**Appearance Information: **\n")
+            result_sections.append(appearance_str)
             result_sections.append("")
     
     # Format low-level edges
@@ -122,7 +145,10 @@ if __name__ == "__main__":
     query = "Which takeout should be taken to Anna?"
     
     try:
-        parse_query_response = generate_text_response(prompt_parse_query + "\n" + query)
+        parse_query_response, _tokens = generate_text_response(
+            prompt_parse_query + "\n" + query,
+            ParseQueryOutput
+        )
         result = search_with_parse(query, graph, parse_query_response)
         print(result)
     except Exception as e:

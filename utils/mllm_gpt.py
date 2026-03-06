@@ -4,33 +4,21 @@ import cv2
 import time
 import numpy as np
 from openai import OpenAI
-from typing import Optional
 
-from utils.token_monitor import TokenMonitor
-
-
-def get_response(messages, token_monitor: Optional[TokenMonitor] = None):
+def get_response(messages, text_format=None):
     client = OpenAI()
-    response = client.chat.completions.create(
-        model="gemini-2.5-flash",
-        messages=messages,
-    )
-    content = response.choices[0].message.content
-    if token_monitor is not None and response.usage:
-        usage = response.usage
-        prompt_tokens = getattr(usage, "prompt_tokens", None)
-        if prompt_tokens is None:
-            prompt_tokens = getattr(usage, "input_tokens", 0)
-        completion_tokens = getattr(usage, "completion_tokens", None)
-        if completion_tokens is None:
-            completion_tokens = getattr(usage, "output_tokens", 0)
-        total_tokens = getattr(usage, "total_tokens", None)
-        token_monitor.add_vision_usage(
-            prompt_tokens=prompt_tokens or 0,
-            completion_tokens=completion_tokens or 0,
-            total_tokens=total_tokens,
+    if text_format is None:
+        response = client.responses.parse(
+            model="gpt-5-mini",
+            input=messages,
         )
-    return content
+    else:
+        response = client.responses.parse(
+            model="gpt-5-mini",
+            input=messages,
+            text_format=text_format,
+        )
+    return response.output_parsed, response.usage.total_tokens
 
 
 def generate_messages(images, prompt):
@@ -77,15 +65,13 @@ def generate_messages(images, prompt):
 
     content = [
         {
-            "type": "text",
+            "type": "input_text",
             "text": prompt
         },
         *[
             {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{frame}"
-                }
+                "type": "input_image",
+                "image_url": f"data:image/jpeg;base64,{frame}"
             }
             for frame in base64Frames
         ]
@@ -96,16 +82,3 @@ def generate_messages(images, prompt):
         "content": content
     }]
     return messages
-
-
-if __name__ == "__main__":
-    start_time = time.time()
-
-    from prompts import prompt_generate_episodic_memory, character_matching_information
-    
-    messages = generate_messages("../data/frames/bedroom_01_10min", character_matching_information + prompt_generate_episodic_memory)
-    response = get_response(messages)
-    print(response)
-    
-    elapsed_time = time.time() - start_time
-    print(f"Time taken: {elapsed_time} seconds")
