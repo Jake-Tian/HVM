@@ -53,6 +53,12 @@ process_one_video() {
     return 1
   fi
 
+  if ! python3 preprocessing/add_subtitles_and_extract_frames.py "$video"; then
+    echo "✗ [${video}] Frame extraction failed"
+    cleanup_video "$video"
+    return 1
+  fi
+
   # Step 3: Build graph memory
   if python3 process_full_video.py "$video"; then
     echo "✓ [${video}] Graph memory built"

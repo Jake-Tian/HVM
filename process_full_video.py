@@ -226,7 +226,7 @@ def process_full_video(video_name):
     output_json_path.parent.mkdir(parents=True, exist_ok=True)
     token_summaries["total"] = int(sum(v for v in token_summaries.values()))
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump({"episodic_memory": episodic_memory, "memory_token_summaries": token_summaries}, f, indent=2)
+        json.dump({"memory_token_summaries": token_summaries, "episodic_memory": episodic_memory}, f, indent=2)
     print(f"\n✓ Saved episodic memory and token summaries for {video_name} to {output_json_path}")
     return graph, episodic_memory, token_summaries
 

@@ -9,6 +9,7 @@ from utils.llm import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
 from utils.prompts import prompt_parse_query, prompt_graph_video, prompt_video_answer, prompt_video_answer_final, prompt_agent_verify_answer_referencing
 from classes.output_structure import ParseQueryOutput, GraphOutputFormat, VideoOutputFormat
+from reason_ablation import reason_k30, reason_no_allocation, reason_no_video_rewatch
 from utils.search import search_with_parse
 from utils.general import find_pkl_files, Tee
 
@@ -203,28 +204,54 @@ def main():
             answer = video_question.get("answer", "")
 
             try:
-                result = reason(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result["final_answer"])
-                print("Evaluate: ", evaluate_correct)
-
-                reasoning_results[question_id] = {
-                    "question": question,
-                    "ground_truth_answer": answer,
-                    "evaluate_correct": evaluate_correct,
-                    "reasoning": result,
-                    "timestamp": video_question.get("timestamp"),
-                    "type": video_question.get("type"),
-                }
+                main_result = reason(graph, video_name, question)
+                evaluate_correct = evaluate_answer(question, answer, main_result["final_answer"])
+                main_result["evaluate_correct"] = evaluate_correct
             except Exception as e:
                 print(f"Error processing question {question_id}: {e}")
                 traceback.print_exc()
-                reasoning_results[question_id] = {
-                    "question": question,
-                    "ground_truth_answer": answer,
-                    "error_message": str(e),
-                    "timestamp": video_question.get("timestamp"),
-                    "type": video_question.get("type"),
-                }
+                main_result = str(e)
+
+            try:
+                result_k30 = reason_k30(graph, video_name, question)
+                evaluate_correct = evaluate_answer(question, answer, result_k30["final_answer"])
+                result_k30["evaluate_correct"] = evaluate_correct
+            except Exception as e:
+                print(f"Error processing question {question_id}: {e}")
+                traceback.print_exc()
+                result_k30 = str(e)
+
+            try:
+                result_no_allocation = reason_no_allocation(graph, video_name, question)
+                evaluate_correct = evaluate_answer(question, answer, result_no_allocation["final_answer"])
+                result_no_allocation["evaluate_correct"] = evaluate_correct
+            except Exception as e:
+                print(f"Error processing question {question_id}: {e}")
+                traceback.print_exc()
+                result_no_allocation = str(e)
+
+            try:
+                result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
+                evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
+                result_no_video_rewatch["evaluate_correct"] = evaluate_correct
+            except Exception as e:
+                print(f"Error processing question {question_id}: {e}")
+                traceback.print_exc()
+                result_no_video_rewatch = str(e)
+
+            reasoning_results[question_id] = {
+                "question": question,
+                "ground_truth_answer": answer,
+                    # Backward-compatible main payload key.
+                    "reasoning": main_result,
+                    "ablations": {
+                        "k30": result_k30,
+                        "no_allocation": result_no_allocation,
+                        "no_video_rewatch": result_no_video_rewatch,
+                    },
+                "timestamp": video_question.get("timestamp"),
+                "type": video_question.get("type"),
+            }
 
         with open(output_json_path, "w") as f:
             json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
@@ -234,4 +261,8 @@ def main():
     log_file.close()
 
 if __name__ == "__main__":
-    main()
+    # main()
+    graph = pickle.load(open("data/graphs/meeting_room_03.pkl", "rb"))
+    question = "Where is the tape now?"
+    result = reason_no_video_rewatch(graph, "meeting_room_03", question)
+    print(result)

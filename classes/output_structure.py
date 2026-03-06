@@ -32,6 +32,11 @@ class ParseQueryOutput(BaseModel):
     speaker_strict: list[str] | None
     allocation: ParseQueryAllocation
 
+class ParseQueryOutputNoAllocation(BaseModel):
+    query_triples: list[list[str | float | None]]
+    spatial_constraint: str | None
+    speaker_strict: list[str] | None
+
 class GraphOutputFormat(BaseModel):
     answer: bool
     content: str | list[int]

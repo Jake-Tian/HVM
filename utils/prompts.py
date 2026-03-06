@@ -474,6 +474,191 @@ Now parse the following query and allocate k=50:
 """
 
 
+prompt_parse_query_k30 = """
+You are a query parser for a knowledge graph system that stores video information in a hierarchical structure.
+
+## GRAPH STRUCTURE
+
+**HIGH-LEVEL EDGES**: Character attributes/relationships
+- Format: `["<Alice>", "confident", null]` or `["<Alice>", "is friend with", "<Bob>"]`
+- **Limited quantity** (<10 per query) - allocate 5-10 max when needed, fewer otherwise
+- Use for: character traits, relationships, "who is" queries
+
+**APPEARANCE EDGES**: Character appearance features
+- Format: `["<Alice>", "wears red hoodie", null]`
+- Use ONLY when question asks about appearance (looks, clothing, hairstyle, body shape, facial features, accessories).
+- Do NOT use for behavior/action/location questions.
+
+**LOW-LEVEL EDGES**: Specific actions/states with scene info
+- Format: `["<Alice>", "picks up", "coffee"]` or `["coffee", "is on", "table"]`
+- Most abundant source - allocate 15-24 for action-focused queries
+- Use for: specific actions, temporal/spatial queries ("what did X do", "where is X")
+
+**CONVERSATIONS**: Dialogue transcripts `[speaker, text]` pairs
+- Allocate 5-24 based on query needs
+- Use for: "why" questions, dialogue content, causal reasoning
+
+## YOUR TASK
+
+Given a query and budget `k=30`, output:
+
+1. **Query triple(s)**: Output **`query_triples`** as a list of 1 to 3 triples.
+   - Triple format: `[source, content, target, source_weight, content_weight, target_weight]`
+   - Use `null` for missing components, normalize to graph format (angle brackets for characters)
+   - If the question is complex (needs an extra constraint), split into:
+     - **Main triple** (first in the list): the core ask with higher weights
+     - **Helper triple** (second in the list): supporting constraint with lower weights
+     - **Additional triple** (third in the list): additional information with lowest weights
+   - **Assign weights** (0.0-1.0):
+
+**Weight Rules**:
+- **High (0.7-1.0)**: Specific character/object names (e.g., "Anna", "coffee", "the red cup") - use 0.9-1.0 for critical entities
+- **Medium (0.4-0.7)**: General objects/locations (e.g., "cup", "room") - use 0.5-0.7 for context
+- **Low (0.1-0.4)**: What we're searching for - question marks ("?"), relationship terms ("relationship", "friendship"), unknown actions - use 0.2-0.4 for search targets, 0.1-0.2 for vague terms
+
+**Special Rules for Location Queries**:
+- **Preserve hierarchical locations**: When parsing location queries, keep complete hierarchical location phrases as single entities in target fields (e.g., "cabinet on the left side of the wardrobe", "cabinet below the dressing table", "table on the right of the water dispenser"). Do NOT split them into separate components.
+- **Temporal-spatial queries**:
+  - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
+  - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]` and prioritize edges with highest clip_id values.
+  - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]` to find placement instructions.
+- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Allocation for location queries**: Prioritize low-level edges (18-24) since they contain spatial information. Use conversations (3-6) only if placement instructions might be mentioned in dialogue.
+
+2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
+   - Total must be <= 30
+   - High-level: 5-10 max (limited availability)
+   - Low-level: 15-24 for action queries
+   - Conversations: 5-24 based on needs
+   - Appearance:
+     - If the question is about character appearance, clothing, hairstyle, facial/body features, accessories:
+       allocate `k_appearance` > 0 (typically 3-10).
+     - Otherwise, `k_appearance` MUST be 0.
+   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance`
+
+3. **speaker_strict**:
+   - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
+   - Set to `null` otherwise
+
+4. **spatial_constraint**: Location string only for general spaces (e.g., gym, office, kitchen, bedroom, living room, meeting room). Do NOT use objects or furniture (e.g., table, dressing table, sofa) as spatial constraints. Otherwise `null`.
+
+## EXAMPLES
+
+**Example 1**: "What is Anna's relationship with Susan?"
+ParseQueryOutput(
+  query_triples=[["<Anna>", "relationship", "<Susan>", 0.95, 0.2, 0.95]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=8, k_low_level=5, k_conversations=17, k_appearance=0, total_k=30,
+    reasoning="Relationship query - use high-level for relationships, conversations for evidence"
+  )
+)
+
+**Example 2**: "What did Emma do with the coffee in the kitchen?"
+ParseQueryOutput(
+  query_triples=[["<Emma>", "?", "coffee", 0.95, 0.15, 0.9]],
+  spatial_constraint="kitchen",
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, total_k=30,
+    reasoning="Action query - prioritize low-level edges"
+  )
+)
+
+**Example 3**: "What did Emily and David discuss?"
+ParseQueryOutput(
+  query_triples=[["<Emily>", "discusses", "<David>", 0.9, 0.3, 0.9]],
+  spatial_constraint=None,
+  speaker_strict=["<Emily>", "<David>"],
+  allocation=ParseQueryAllocation(
+    k_high_level=5, k_low_level=2, k_conversations=23, k_appearance=0, total_k=30,
+    reasoning="Dialogue query - prioritize conversations with specific speakers"
+  )
+)
+
+**Example 4**: "How many things on the dressing table are not often used by Lily?"
+ParseQueryOutput(
+  query_triples=[
+    ["<Lily>", "use", "?", 0.9, 0.7, 0.4],
+    ["?", "is on", "dressing table", 0.2, 0.4, 0.4]
+  ],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=5, k_low_level=20, k_conversations=5, k_appearance=0, total_k=30,
+    reasoning="Main triple targets usage by Lily; helper triple constrains items to dressing table"
+  )
+)
+
+**Example 5**: "where is the tape now?"
+ParseQueryOutput(
+  query_triples=[["tape", "is at", "?", 0.8, 0.5, 0.15]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, total_k=30,
+    reasoning="Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"
+  )
+)
+
+Now parse the following query and allocate k=30:
+"""
+
+
+prompt_parse_query_no_allocation = """
+You are a query parser for a knowledge graph system that stores video information in a hierarchical structure.
+
+## YOUR TASK
+
+Given a query, output:
+
+1. **Query triple(s)**: Output **`query_triples`** as a list of 1 to 3 triples.
+   - Triple format: `[source, content, target, source_weight, content_weight, target_weight]`
+   - Use `null` for missing components, normalize to graph format (angle brackets for characters)
+   - If the question is complex (needs an extra constraint), split into:
+     - **Main triple** (first in the list): the core ask with higher weights
+     - **Helper triple** (second in the list): supporting constraint with lower weights
+     - **Additional triple** (third in the list): additional information with lowest weights
+   - **Assign weights** (0.0-1.0):
+
+**Weight Rules**:
+- **High (0.7-1.0)**: Specific character/object names (e.g., "Anna", "coffee", "the red cup") - use 0.9-1.0 for critical entities
+- **Medium (0.4-0.7)**: General objects/locations (e.g., "cup", "room") - use 0.5-0.7 for context
+- **Low (0.1-0.4)**: What we're searching for - question marks ("?"), relationship terms ("relationship", "friendship"), unknown actions - use 0.2-0.4 for search targets, 0.1-0.2 for vague terms
+
+**Special Rules for Location Queries**:
+- **Preserve hierarchical locations**: When parsing location queries, keep complete hierarchical location phrases as single entities in target fields (e.g., "cabinet on the left side of the wardrobe", "cabinet below the dressing table", "table on the right of the water dispenser"). Do NOT split them into separate components.
+- **Temporal-spatial queries**:
+  - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X.
+  - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]`.
+  - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]`.
+- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]`. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+
+2. **speaker_strict**:
+   - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
+   - Set to `null` otherwise
+
+3. **spatial_constraint**: Location string only for general spaces (e.g., gym, office, kitchen, bedroom, living room, meeting room). Do NOT use objects or furniture (e.g., table, dressing table, sofa) as spatial constraints. Otherwise `null`.
+
+## EXAMPLES
+
+**Example 1**: "What is Anna's relationship with Susan?"
+query_triples=[["<Anna>", "relationship", "<Susan>", 0.95, 0.2, 0.95]] spatial_constraint=None speaker_strict=None
+
+**Example 2**: "What did Emma do with the coffee in the kitchen?"
+query_triples=[["<Emma>", "?", "coffee", 0.95, 0.15, 0.9]] spatial_constraint="kitchen" speaker_strict=None
+
+**Example 3**: "How many things on the dressing table are not often used by Lily?"
+query_triples=[
+  ["<Lily>", "use", "?", 0.9, 0.7, 0.4],
+  ["?", "is on", "dressing table", 0.2, 0.4, 0.4]
+] spatial_constraint=None speaker_strict=None
+
+Now parse the following query:
+"""
+
+
 prompt_graph_episodic = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
@@ -626,6 +811,23 @@ GraphVideoOutput(
   content=[8, 11, 9, 10],
   summary="The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step."
 )
+"""
+
+
+prompt_no_video_rewatch = """
+You are a reasoning system that answers the question based on the searched information from a video.
+
+You will be provided with the extracted knowledge from the video graph, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
+
+Input format: 
+- **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
+  Example: Anna is: health-conscious (80) means 80% confidence.
+- **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
+  Applies to both low-level actions and conversation messages.
+  Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
+
+Output: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
+Answers like "I don't know" or "The information is not sufficient to answer the question" are NOT allowed. You can guess the answer based on the information provided.
 """
 
 
@@ -895,6 +1097,7 @@ Your task is to answer the question based on the current video and ALL previous 
 - Distinguish between instructions ("should X be done first?") and actual sequence ("what happened before/after X?").
 
 **Output**: Provide a concise answer in ONE SENTENCE. Be brief and to the point. Only output the answer, with no additional explanation.
+Answers like "I don't know" or "The information is not sufficient to answer the question" are NOT allowed. You can guess the answer based on the information provided.
 """
 
 
