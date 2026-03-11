@@ -1081,7 +1081,18 @@ You are given a 30-second video represented as sequential frames (pictures in ch
 
 Your task is to answer the question based on the current video and ALL previous video summaries. If the given information is insufficient or missing critical details, you can make reasonable inferences.
 
-**SPECIAL QUESTION TYPES**:
+**Answer rules (strict):**
+1. Output ONLY the minimal answer phrase needed for the question:
+   - Yes/No question -> output "Yes" or "No" first, then at most one short clause if necessary.
+2. ONE sentence maximum.
+3. Do NOT use hedging words: "appears", "seems", "might", "probably", "likely".
+4. Do NOT add meta phrases: "The video shows...", "According to...", "Based on the clips...".
+5. Reuse exact entity/location terms from the question and previous summaries whenever possible.
+   - Do not substitute with different names or alternate objects/places.
+6. If evidence is incomplete, make the best direct guess instead of refusing.
+   - Answer like "I don't know", "insufficient information", "cannot determine" are NOT allowed.
+
+**Special question types:**
 
 1. **Counting Questions** (questions asking "how many", "how many times", "how many pieces", "how many kinds"):
 - CRITICAL: This is the ONLY clip where counting questions can be answered.
@@ -1097,11 +1108,8 @@ Your task is to answer the question based on the current video and ALL previous 
 - Review all previous summaries and current clip to determine the complete sequence.
 - Distinguish between instructions ("should X be done first?") and actual sequence ("what happened before/after X?").
 
-4. **Yes/No questions**: If the observed behavior or summaries clearly support one option (e.g. character shows OCD-like or hygiene-obsessed behavior), answer that option (Yes or No). Do not refuse to answer on the grounds of "no explicit diagnosis" or "no direct evidence" when the behavior is clearly shown.
-
-**Output**: Provide ONLY the minimal phrase that answers the question (e.g. a name, a location, a number, or Yes/No). Do NOT use introductory phrases like "The video shows..." or "According to...". Do NOT use hedging like "appears to", "seems to", or "might be"—state the answer directly. One sentence only, no additional explanation.
-Use the same character names, object names, and location phrases as in the question and in the previous summaries (e.g. if the summary says "Joy" or "shorter coat rack", use those exact terms). Do not substitute different names or locations.
-Answers like "I don't know" or "The information is not sufficient to answer the question" are NOT allowed. You can guess the answer based on the information provided.
+**Output**: 
+Return only the final answer sentence, nothing else.
 """
 
 
@@ -1112,7 +1120,6 @@ Do not directly compare the surface forms of the agent answer and the ground tru
 Important notes:
 	•	Do not require exact wording or matching structure.
 	•	Semantic inference is sufficient, as long as the agent answer entails or implies the meaning of the ground truth answer, given the question.
-	•	If the agent answer is longer or hedged (e.g. "Emma's allergy appears serious enough to cause a rash") but its meaning contradicts or does not support the ground truth (e.g. "Not serious"), return No. If the agent answer supports or implies the ground truth despite different wording or hedging, return Yes.
 	•	Only return "Yes" or "No", with no additional explanation or formatting.
 
 Input fields:

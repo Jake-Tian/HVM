@@ -6,8 +6,6 @@ __pycache__/
 .Python
 
 # Data file
-data/
-!data/
 data/*
 !data/robot.json
 
@@ -32,13 +30,8 @@ visualization/
 *.pt
 *.pth
 
-boxmot/
-logs/
 log.txt
-
-# Files with secrets
-preprocessing/local_voice_diarization.py
-utils/mllm.py
+*.log
 
 # IDE
 .vscode/
@@ -50,16 +43,6 @@ utils/mllm.py
 .DS_Store
 Thumbs.db
 
-# Local scripts
+# local scripts
 test.sh
-
-# Analysis documents (local only, not for GitHub)
-error_analysis.md
-location_improvement_suggestions.md
-REASONING_PROCESS.md
-
-# Log files (local only, not for GitHub)
 test.log
-
-# Local scripts (local only, not for GitHub)
-process_graph.py

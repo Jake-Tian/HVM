@@ -9,9 +9,6 @@ tqdm>=4.66.0
 huggingface-hub>=0.20.0
 
 # Visualization (for visualization/visualize_graph_dedup.py, graph_to_html.py, graph_to_picture.py)
-pyvis>=0.3.0
-networkx>=3.0
-matplotlib>=3.7
-
-# Screenshot from HTML (visualization/html_to_screenshot.py)
-playwright>=1.40
+# pyvis>=0.3.0
+# networkx>=3.0
+# matplotlib>=3.7

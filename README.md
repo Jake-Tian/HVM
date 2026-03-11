@@ -1,4 +1,4 @@
-# HiViM-simple
+# Hierarchical Video Memory
 
 Pipeline for building graph memory from videos and answering QA with graph + video reasoning.
 
@@ -39,7 +39,7 @@ Per successfully processed video:
 
 ## Data Structure
 
-Expected layout in `data` (some folders are created/populated during pipeline runtime):
+Expected layout in `data/` (some folders are created/populated during pipeline runtime):
 
 ```text
 data/
