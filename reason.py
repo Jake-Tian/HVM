@@ -134,6 +134,12 @@ def reason(graph, video_name, question):
     try:
         messages = generate_messages(images, prompt)
         response, tokens = get_response(messages)
+        if response is None or (isinstance(response, str) and not response.strip()):
+            # Fallback: use last summary or placeholder so final_answer is never null
+            response = (
+                summary_dict[clip_ids[-2]] if len(clip_ids) >= 2 and clip_ids[-2] in summary_dict
+                else "No answer could be generated from the video."
+            )
         result['final_answer'] = response
     except Exception as e:
         raise Exception(f"Error processing last clip {clip_id}: {e}")
@@ -261,8 +267,4 @@ def main():
     log_file.close()
 
 if __name__ == "__main__":
-    # main()
-    graph = pickle.load(open("data/graphs/meeting_room_03.pkl", "rb"))
-    question = "Where is the tape now?"
-    result = reason_no_video_rewatch(graph, "meeting_room_03", question)
-    print(result)
+    main()

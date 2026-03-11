@@ -8,17 +8,18 @@ from openai import OpenAI
 def get_response(messages, text_format=None):
     client = OpenAI()
     if text_format is None:
-        response = client.responses.parse(
+        response = client.responses.create(
             model="gpt-5-mini",
             input=messages,
         )
+        return response.output_text, getattr(response.usage, "total_tokens", None) or 0
     else:
         response = client.responses.parse(
             model="gpt-5-mini",
             input=messages,
             text_format=text_format,
         )
-    return response.output_parsed, response.usage.total_tokens
+        return response.output_parsed, getattr(response.usage, "total_tokens", None) or 0
 
 
 def generate_messages(images, prompt):

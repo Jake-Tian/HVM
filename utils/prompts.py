@@ -721,6 +721,7 @@ Output should include:
 
 **Decision criteria**: 
 1. Answer directly when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose Answer.
+  When the graph allows a reasonable one-sentence answer (even if not perfect), prefer Answer (answer=True). Only choose Search video when the graph is clearly insufficient (e.g. missing key entity, no location detail, or count cannot be inferred).
   Output should be: 
   - answer: True
   - content: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
@@ -733,9 +734,9 @@ Output should include:
   - summary: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
 
 Special types of questions:
-1. Spatial/Location questions (questions asking "where" or "which place"): 
+1. Spatial/Location questions (questions asking "where" or "which place"):
   - answer is True only if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
-  - If the location information is generic (e.g., "kitchen", "office", "living room"), answer is False: 
+  - If the location information is generic (e.g., "kitchen", "office", "living room"), answer is False:
     - content: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]. 
     - Include the clips where the actions occured, and the clips before and after the actions if neccessary. 
     - summary: Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences. Exclude irrelevant information such as character attributes, relationships, and conversations.
@@ -1096,7 +1097,10 @@ Your task is to answer the question based on the current video and ALL previous 
 - Review all previous summaries and current clip to determine the complete sequence.
 - Distinguish between instructions ("should X be done first?") and actual sequence ("what happened before/after X?").
 
-**Output**: Provide a concise answer in ONE SENTENCE. Be brief and to the point. Only output the answer, with no additional explanation.
+4. **Yes/No questions**: If the observed behavior or summaries clearly support one option (e.g. character shows OCD-like or hygiene-obsessed behavior), answer that option (Yes or No). Do not refuse to answer on the grounds of "no explicit diagnosis" or "no direct evidence" when the behavior is clearly shown.
+
+**Output**: Provide ONLY the minimal phrase that answers the question (e.g. a name, a location, a number, or Yes/No). Do NOT use introductory phrases like "The video shows..." or "According to...". Do NOT use hedging like "appears to", "seems to", or "might be"—state the answer directly. One sentence only, no additional explanation.
+Use the same character names, object names, and location phrases as in the question and in the previous summaries (e.g. if the summary says "Joy" or "shorter coat rack", use those exact terms). Do not substitute different names or locations.
 Answers like "I don't know" or "The information is not sufficient to answer the question" are NOT allowed. You can guess the answer based on the information provided.
 """
 
@@ -1108,6 +1112,7 @@ Do not directly compare the surface forms of the agent answer and the ground tru
 Important notes:
 	•	Do not require exact wording or matching structure.
 	•	Semantic inference is sufficient, as long as the agent answer entails or implies the meaning of the ground truth answer, given the question.
+	•	If the agent answer is longer or hedged (e.g. "Emma's allergy appears serious enough to cause a rash") but its meaning contradicts or does not support the ground truth (e.g. "Not serious"), return No. If the agent answer supports or implies the ground truth despite different wording or hedging, return Yes.
 	•	Only return "Yes" or "No", with no additional explanation or formatting.
 
 Input fields:

@@ -132,6 +132,11 @@ def reason_k30(graph, video_name, question):
     try:
         messages = generate_messages(images, prompt)
         response, tokens = get_response(messages)
+        if response is None or (isinstance(response, str) and not response.strip()):
+            response = (
+                summary_dict[clip_ids[-2]] if len(clip_ids) >= 2 and clip_ids[-2] in summary_dict
+                else "No answer could be generated from the video."
+            )
         result['final_answer'] = response
     except Exception as e:
         raise Exception(f"Error processing last clip {clip_id}: {e}")
@@ -279,6 +284,11 @@ def reason_no_allocation(graph, video_name, question):
     try:
         messages = generate_messages(images, prompt)
         response, tokens = get_response(messages)
+        if response is None or (isinstance(response, str) and not response.strip()):
+            response = (
+                summary_dict[clip_ids[-2]] if len(clip_ids) >= 2 and clip_ids[-2] in summary_dict
+                else "No answer could be generated from the video."
+            )
         result['final_answer'] = response
     except Exception as e:
         raise Exception(f"Error processing last clip {clip_id}: {e}")

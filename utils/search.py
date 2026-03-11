@@ -55,9 +55,21 @@ def search_with_parse(query, graph, parse_query_response):
         else:
             raise ValueError("query_triple(s) not found in strategy")
 
-        for idx in (3,4,5):
-            if not isinstance(query_triples[idx], float):
-                query_triples[idx] = float(query_triples[idx])
+        # Ensure weight fields (indices 3,4,5) of each triple are float
+        normalized = []
+        for one_triple in query_triples:
+            if isinstance(one_triple, (list, tuple)) and len(one_triple) >= 6:
+                row = list(one_triple)
+                for idx in (3, 4, 5):
+                    if not isinstance(row[idx], (int, float)):
+                        try:
+                            row[idx] = float(row[idx])
+                        except (TypeError, ValueError):
+                            row[idx] = 1.0
+                normalized.append(row)
+            else:
+                normalized.append(one_triple if isinstance(one_triple, list) else list(one_triple))
+        query_triples = normalized
 
         k_high_level = allocation.get("k_high_level", 5)
         k_appearance = allocation.get("k_appearance", 0)
