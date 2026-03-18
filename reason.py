@@ -9,7 +9,7 @@ from utils.llm import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
 from utils.prompts import prompt_parse_query, prompt_graph_video, prompt_video_answer, prompt_video_answer_final, prompt_agent_verify_answer_referencing
 from classes.output_structure import ParseQueryOutput, GraphOutputFormat, VideoOutputFormat
-from reason_ablation import reason_k30, reason_no_allocation, reason_no_video_rewatch
+from reason_ablation import reason_k30, reason_no_allocation
 from utils.search import search_with_parse
 from utils.general import find_pkl_files, Tee
 
@@ -236,28 +236,28 @@ def main():
                 traceback.print_exc()
                 result_no_allocation = str(e)
 
-            try:
-                result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
-                result_no_video_rewatch["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_no_video_rewatch = str(e)
+            # try:
+            #     result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
+            #     evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
+            #     result_no_video_rewatch["evaluate_correct"] = evaluate_correct
+            # except Exception as e:
+            #     print(f"Error processing question {question_id}: {e}")
+            #     traceback.print_exc()
+            #     result_no_video_rewatch = str(e)
 
-            reasoning_results[question_id] = {
-                "question": question,
-                "ground_truth_answer": answer,
-                    # Backward-compatible main payload key.
-                    "reasoning": main_result,
-                    "ablations": {
-                        "k30": result_k30,
-                        "no_allocation": result_no_allocation,
-                        "no_video_rewatch": result_no_video_rewatch,
-                    },
-                "timestamp": video_question.get("timestamp"),
-                "type": video_question.get("type"),
-            }
+            # reasoning_results[question_id] = {
+            #     "question": question,
+            #     "ground_truth_answer": answer,
+            #         # Backward-compatible main payload key.
+            #         "reasoning": main_result,
+            #         "ablations": {
+            #             "k30": result_k30,
+            #             "no_allocation": result_no_allocation,
+            #             "no_video_rewatch": result_no_video_rewatch,
+            #         },
+            #     "timestamp": video_question.get("timestamp"),
+            #     "type": video_question.get("type"),
+            # }
 
         with open(output_json_path, "w") as f:
             json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
