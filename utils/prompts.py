@@ -218,6 +218,53 @@ Now convert the following list of action sentences into triples:
 """
 
 
+prompt_extract_timetriples = """
+You are given translated dense-caption text segments from an egocentric video.
+Each segment has a start timestamp and one short sentence.
+
+Your task is to convert this text into a list of TimeTriple items.
+
+## Target schema
+- Output must match:
+  TimeTripleList(
+    triples=[
+      TimeTriple(time="hhmmss", triple=[source, content, target]),
+      ...
+    ]
+  )
+- `time` must use one of the provided segment start timestamps exactly.
+- Timestamp format is strictly 6 digits: `hhmmss` (example: `110943`).
+- `triple` must always contain exactly 3 strings: [source, content, target]
+- If target is missing, use the literal string "null" (not Python null).
+
+## Extraction rules
+1. Preserve chronology.
+2. Prefer concrete entities from the text:
+   - Characters should keep angle brackets if present (e.g., <Alice>, <robot>).
+   - If no explicit character is named and the sentence uses first person ("I"), use "<I>" as source.
+3. Normalize actions to concise verb phrases in simple present tense.
+4. Keep important spatial/temporal modifiers in content when needed
+   (e.g., "puts on", "moves to the left", "is in front of").
+5. Split compound events into multiple triples when necessary.
+6. Remove obvious duplication and low-information filler.
+7. Do not invent entities not supported by the text.
+
+## Good examples
+Input line:
+{"time":"110959","text":"I put my phone in the middle of the dining table."}
+Output triples:
+ - TimeTriple(time="110959", triple=["<I>", "puts", "phone"])
+- TimeTriple(time="110959", triple=["phone", "is in the middle of", "dining table"])
+
+Input line:
+{"time":"111005","text":"Katrina asked me a question."}
+Output triples:
+ - TimeTriple(time="111005", triple=["Katrina", "asks", "<I>"])
+
+Now convert the following input segments:
+"""
+
+
 prompt_summary = """
 You are given a sequence of video clips (each clip is 30 seconds long) with scene descriptions and character behaviors.
 Your task is to summarize this information into a concise, narrative paragraph.
@@ -1110,6 +1157,158 @@ Your task is to answer the question based on the current video and ALL previous 
 
 **Output**: 
 Return only the final answer sentence, nothing else.
+"""
+
+
+#--------------------------------
+# Prompts for EgoLife
+#--------------------------------
+
+prompt_allocate_search = """
+You are a search-budget allocator for an external database.
+
+The database has two sources:
+1) **behaviors**: action/state/location events from visual observations
+2) **conversations**: spoken dialogue content
+
+Given a question, allocate a fixed budget **k=50** between the two sources.
+
+## Output format
+1. k_behavior: int
+2. k_conversation: int
+3. speaker_strict: the list of speakers
+4. reasoning: one short sentence
+
+Constraints:
+- `k_behavior + k_conversation == 50`
+- `k_behavior >= 0`, `k_conversation >= 0`
+- `speaker_strict`:
+  - use `["Jake", "Shure"]` style when question explicitly asks about specific speakers' dialogue
+  - if the question uses first-person references ("I", "me", "my"), map that speaker to `"Jake"` when speaker filtering is necessary for dialogue retrieval
+  - use `null` otherwise
+- Prefer integers (no decimals)
+- No markdown, no extra text
+
+## Allocation principles
+1. **Behavior-priority questions** (allocate more to behaviors: usually 32-45)
+   - action/object manipulation: "what did X do", "who used/picked/moved..."
+   - spatial/location: "where is/was...", placement, source location
+   - temporal sequence from events: "before/after/first/last"
+   - counting event occurrences: "how many times..."
+
+2. **Conversation-priority questions** (allocate more to conversations: usually 32-45)
+   - dialogue content: "what did they discuss/say/ask/answer/mention"
+   - intention/plan/preference from speech: "plan to", "decide to", "want to"
+   - causal questions likely verbalized: "why..."
+   - if specific speakers are named for dialogue, set `speaker_strict` to those names
+   - if first-person ("I"/"me"/"my") appears and speaker filtering helps, include `"Jake"` in `speaker_strict`
+
+3. **Balanced questions** (allocate near-even: 20-30 each)
+   - require both action evidence and dialogue evidence
+   - speaker + behavior mixed constraints
+
+## Examples
+Question: "Where was the black marker before?"
+Output:
+{"k_behavior": 42, "k_conversation": 8, "speaker_strict": null, "reasoning": "Location query depends mainly on observed object placement events."}
+
+Question: "What did Jake and Shure discuss this morning?"
+Output:
+{"k_behavior": 12, "k_conversation": 38, "speaker_strict": ["Jake", "Shure"], "reasoning": "Discussion content is primarily in dialogue between named speakers."}
+
+Question: "Who helped me while I was cleaning in the kitchen?"
+Output:
+{"k_behavior": 36, "k_conversation": 14, "speaker_strict": null, "reasoning": "Main evidence is co-occurring actions, with possible supporting dialogue."}
+
+Now allocate k=50 for the following question:
+"""
+
+
+prompt_answer_with_search_results = """
+You are a reasoning module for iterative retrieval.
+
+You will receive:
+1) a user question
+2) multiple-choice options (A/B/C/D)
+2) retrieved search results from behavior and/or conversation memory
+
+Your task is to decide whether the retrieved results are sufficient to answer the question.
+
+## Decision
+1. If sufficient:
+   - return the selected option as the final answer.
+2. If insufficient:
+   - return:
+     - an updated question for the next retrieval round (more specific and focused on missing information)
+     - a concise summary of what is already known from current results
+     - allocation for next-round retrieval between behavior and conversation (k=50 total)
+
+Output format:
+1. Answer: True or False,
+2. Content: the selected option (e.g., "A") if Answer=True, otherwise updated question for next round,
+3. Summary: None if Answer=True, otherwise concise summary of current search results
+4. total_search_k: int or None
+5. k_behavior: int or None
+6. k_conversation: int or None
+7. speaker_strict: list[str] or None
+
+Constraints:
+- If `answer=true`:
+  - `content` must be exactly one option label: `"A"`, `"B"`, `"C"`, or `"D"`.
+  - `summary` must be None.
+  - `total_search_k`, `k_behavior`, `k_conversation`, `speaker_strict` must be null.
+- If `answer=false`:
+  - `content` must be a better retrieval question, not an answer.
+  - `content` should target missing evidence that can distinguish among options.
+  - `summary` must capture only key facts relevant to the given question (2-4 sentences).
+  - Do NOT include irrelevant events, entities, or background details.
+  - LLM should decide next-round total search budget:
+    - `1 <= total_search_k <= 50`
+    - Use smaller budgets (e.g., 15-40) when the missing evidence is narrow/specific to reduce distraction.
+  - `k_behavior + k_conversation == total_search_k`
+  - choose allocation based on missing evidence:
+    - prefer behavior when missing actions/locations/order/counting
+    - prefer conversation when missing discussion/intent/why
+  - `speaker_strict`:
+    - use explicit names when dialogue between specific speakers is needed
+    - map first-person references ("I", "me", "my") to "Jake" only if speaker filtering is helpful
+    - otherwise use null
+- Do NOT output markdown or extra text.
+- Reuse concrete entities/timestamps from retrieved results when helpful.
+
+Decision guidance:
+- Set `answer=true` when current evidence can reasonably eliminate other options and support one best option.
+- Continue searching (`answer=false`) when key evidence is truly missing or multiple options remain similarly plausible.
+- If one option is clearly more supported than others, answer now.
+
+Now process the following input:
+"""
+
+
+prompt_answer_with_search_results_final = """
+You are the final-round reasoner for a multiple-choice QA task.
+
+You will receive:
+1) the question
+2) options A/B/C/D
+3) accumulated retrieved evidence from all previous search rounds
+
+You must choose one option based on the accumulated retrieved evidence.
+If you are not sure, choose the option that is most supported by the evidence.
+
+## Output format (STRICT JSON)
+Return ONLY one JSON object:
+{
+  "content": "<A|B|C|D>",
+  "summary": "<1-3 sentence evidence summary for why this option is best>"
+}
+
+Rules:
+- `content` must be exactly one of: `"A"`, `"B"`, `"C"`, `"D"`.
+- `summary` should cite the strongest evidence from retrieved results.
+- No markdown, no extra text.
+
+Now process the following input:
 """
 
 

@@ -1,174 +1,181 @@
-# python -m utils.search
+from __future__ import annotations
 
-import pickle
-from classes.hetero_graph import HeteroGraph
-from classes.output_structure import ParseQueryOutput
-from utils.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
+import json
+from pathlib import Path
+
+import numpy as np
+
+from utils.llm import get_embedding
 
 
-def search_with_parse(query, graph, parse_query_response):
+def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
+    a = np.array(vec1, dtype=float)
+    b = np.array(vec2, dtype=float)
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom == 0.0:
+        return -1.0
+    return float(np.dot(a, b) / denom)
+
+
+def _collect_json_files(file_directory: str | Path) -> list[Path]:
+    target = Path(file_directory)
+    if not target.exists():
+        raise FileNotFoundError(f"Path not found: {target}")
+    if target.is_file():
+        return [target]
+    return sorted(target.glob("*.json"))
+
+
+def _parse_behavior_row(row) -> tuple[str, str] | None:
+    if not isinstance(row, list) or len(row) < 2:
+        return None
+    timestamp, content = row[0], row[1]
+    if not isinstance(timestamp, str) or not isinstance(content, str):
+        return None
+    return timestamp, content
+
+
+def _parse_conversation_row(row) -> tuple[str, str, str] | None:
+    if not isinstance(row, dict):
+        return None
+    timestamp = row.get("start_time")
+    speaker = row.get("speaker")
+    content = row.get("content")
+    if not isinstance(timestamp, str) or not isinstance(speaker, str) or not isinstance(content, str):
+        return None
+    return timestamp, speaker, content
+
+
+def search_behavior(
+    question: str,
+    k: int,
+    file_directory: str | Path,
+    context_window: int = 1,
+) -> list[list[str]]:
     """
-    Search the graph and return search results based on a parsed query.
-    
-    This function:
-    1. Parses the parse_query_response to extract search strategy
-    2. Searches high-level edges, low-level edges, and conversations
-    3. Formats all results into a single natural language string
-    4. Returns the formatted search results
-    
-    Args:
-        query: Natural language query string (used for conversation search)
-        graph: HeteroGraph instance to search
-        parse_query_response: Parsed output from prompt_parse_query
-            (typically ParseQueryOutput; may also be tuple(result, tokens))
-    
-    Returns:
-        str: Formatted string containing all search results in natural language
+    Search behavior files and return top-k hits expanded with context.
+    For each selected hit, include `context_window` rows before and after.
+
+    Behavior file format:
+      [
+        [start_time_hhmmss, content, embedding],
+        ...
+      ]
     """
-    # Handle generate_text_response(...) outputs that may be (parsed_obj, tokens)
-    if isinstance(parse_query_response, tuple):
-        if len(parse_query_response) == 0:
-            raise ValueError("parse_query_response tuple is empty")
-        parse_query_response = parse_query_response[0]
+    if k <= 0:
+        return []
 
-    # ParseQueryOutput object (new expected format)
-    if isinstance(parse_query_response, ParseQueryOutput):
-        query_triples = parse_query_response.query_triples
-        spatial_constraint = parse_query_response.spatial_constraint
-        speaker_strict = parse_query_response.speaker_strict
-        k_high_level = parse_query_response.allocation.k_high_level
-        k_appearance = parse_query_response.allocation.k_appearance
-        k_low_level = parse_query_response.allocation.k_low_level
-        k_conversations = parse_query_response.allocation.k_conversations
-    # Backward compatibility for dict payloads
-    elif isinstance(parse_query_response, dict):
-        triple = parse_query_response.get("query_triple")
-        triples = parse_query_response.get("query_triples")
-        spatial_constraint = parse_query_response.get("spatial_constraint")
-        speaker_strict = parse_query_response.get("speaker_strict")
-        allocation = parse_query_response.get("allocation", {})
+    query_embedding = get_embedding(question)
+    scored: list[tuple[float, int, int]] = []  # score, file_idx, row_idx
+    file_data: list[list] = []
 
-        if triples and isinstance(triples, list):
-            query_triples = triples
-        elif triple:
-            query_triples = [triple]
-        else:
-            raise ValueError("query_triple(s) not found in strategy")
+    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
+        with json_path.open("r", encoding="utf-8") as infile:
+            data = json.load(infile)
+        file_data.append(data if isinstance(data, list) else [])
 
-        # Ensure weight fields (indices 3,4,5) of each triple are float
-        normalized = []
-        for one_triple in query_triples:
-            if isinstance(one_triple, (list, tuple)) and len(one_triple) >= 6:
-                row = list(one_triple)
-                for idx in (3, 4, 5):
-                    if not isinstance(row[idx], (int, float)):
-                        try:
-                            row[idx] = float(row[idx])
-                        except (TypeError, ValueError):
-                            row[idx] = 1.0
-                normalized.append(row)
-            else:
-                normalized.append(one_triple if isinstance(one_triple, list) else list(one_triple))
-        query_triples = normalized
+        for row_idx, item in enumerate(file_data[file_idx]):
+            if not isinstance(item, list) or len(item) < 3:
+                continue
+            parsed = _parse_behavior_row(item)
+            if parsed is None:
+                continue
+            _, _ = parsed
+            embedding = item[2]
+            if not isinstance(embedding, list):
+                continue
+            score = _cosine_similarity(query_embedding, embedding)
+            scored.append((score, file_idx, row_idx))
 
-        k_high_level = allocation.get("k_high_level", 5)
-        k_appearance = allocation.get("k_appearance", 0)
-        k_low_level = allocation.get("k_low_level", 10)
-        k_conversations = allocation.get("k_conversations", 10)
-    else:
-        raise TypeError(
-            "parse_query_response must be ParseQueryOutput, dict, or tuple(parsed, tokens). "
-            f"Got: {type(parse_query_response).__name__}"
-        )
+    scored.sort(key=lambda x: x[0], reverse=True)
+    anchors = scored[:k]
 
-    # Search the graph
-    try:
-        # Search in two independent parts with separate k budgets.
-        high_level_edges = graph.search_high_level_edges(query_triples, max(0, k_high_level))
-        print("High-level edges searched: ", len(high_level_edges))
-        appearance_edges = graph.search_appearance_edges(query_triples, max(0, k_appearance))
-        
-        # Search low-level edges
-        low_level_edges = graph.search_low_level_edges(
-            query_triples, 
-            k_low_level,
-            spatial_constraint
-        )
-        print("Low-level edges searched: ", len(low_level_edges))
-        
-        # Search conversations (use original query string)
-        conversation_results = graph.search_conversations(
-            query,
-            k_conversations,
-            speaker_strict
-        )
-        print("Conversations searched: ", len(conversation_results))
-        
-    except Exception as e:
-        raise Exception(f"Error searching graph: {e}")
+    selected: list[tuple[str, str]] = []
+    seen = set()
+    for _, file_idx, row_idx in anchors:
+        rows = file_data[file_idx]
+        start = max(0, row_idx - context_window)
+        end = min(len(rows) - 1, row_idx + context_window)
+        for idx in range(start, end + 1):
+            parsed = _parse_behavior_row(rows[idx])
+            if parsed is None:
+                continue
+            key = (file_idx, idx)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(parsed)
 
-    # Format results into strings
-    result_sections = []
-    
-    # Format high-level edges
-    if high_level_edges:
-        high_level_str = high_level_edges_to_string(high_level_edges)
-        if high_level_str:
-            result_sections.append("**High-Level Information (Character Attributes and Relationships): **\n")
-            result_sections.append(high_level_str)
-            result_sections.append("")
-
-    # Format appearance edges
-    if appearance_edges:
-        appearance_str = high_level_edges_to_string(appearance_edges)
-        if appearance_str:
-            result_sections.append("**Appearance Information: **\n")
-            result_sections.append(appearance_str)
-            result_sections.append("")
-    
-    # Format low-level edges
-    if low_level_edges:
-        low_level_str = low_level_edge_to_string(low_level_edges)
-        if low_level_str:
-            result_sections.append("**Low-Level Information (Actions and Events): **\n")
-            result_sections.append(low_level_str)
-            result_sections.append("")
-    
-    # Format conversations
-    if conversation_results:
-        conversation_str = graph.get_conversation_messages_with_context(conversation_results)
-        if conversation_str:
-            result_sections.append("**Conversations: **\n")
-            result_sections.append(conversation_str)
-    
-    # Combine all sections
-    graph_search_results = "\n".join(result_sections)
-    
-    # If no results found, return a message
-    if not graph_search_results.strip():
-        graph_search_results = "No relevant information found for this query."
-    
-    return graph_search_results
+    selected.sort(key=lambda x: x[0])
+    return [[timestamp, content] for timestamp, content in selected]
 
 
-if __name__ == "__main__":
-    # Example usage
-    from utils.llm import generate_text_response
-    from utils.prompts import prompt_parse_query
-    
-    with open("data/semantic_memory/gym_01.pkl", "rb") as f:
-        graph = pickle.load(f)
-    query = "Which takeout should be taken to Anna?"
-    
-    try:
-        parse_query_response, _tokens = generate_text_response(
-            prompt_parse_query + "\n" + query,
-            ParseQueryOutput
-        )
-        result = search_with_parse(query, graph, parse_query_response)
-        print(result)
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-        
+def search_conversation(
+    question: str,
+    speaker_strict: list[str] | None,
+    file_directory: str | Path,
+    k: int = 50,
+    context_window: int = 1,
+) -> list[list[str]]:
+    """
+    Search conversation files and return top-k hits expanded with context.
+    For each selected hit, include `context_window` rows before and after.
+
+    Conversation file format:
+      [
+        {
+          "start_time": "hhmmss",
+          "speaker": "...",
+          "content": "...",
+          "embedding": [...]
+        },
+        ...
+      ]
+    """
+    if k <= 0:
+        return []
+
+    query_embedding = get_embedding(question)
+    speaker_filter = {s for s in speaker_strict} if speaker_strict else None
+    scored: list[tuple[float, int, int]] = []  # score, file_idx, row_idx
+    file_data: list[list] = []
+
+    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
+        with json_path.open("r", encoding="utf-8") as infile:
+            data = json.load(infile)
+        file_data.append(data if isinstance(data, list) else [])
+
+        for row_idx, item in enumerate(file_data[file_idx]):
+            parsed = _parse_conversation_row(item)
+            if parsed is None:
+                continue
+            _, speaker, _ = parsed
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                continue
+            if speaker_filter is not None and speaker not in speaker_filter:
+                continue
+            score = _cosine_similarity(query_embedding, embedding)
+            scored.append((score, file_idx, row_idx))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    anchors = scored[:k]
+
+    selected: list[tuple[str, str, str]] = []
+    seen = set()
+    for _, file_idx, row_idx in anchors:
+        rows = file_data[file_idx]
+        start = max(0, row_idx - context_window)
+        end = min(len(rows) - 1, row_idx + context_window)
+        for idx in range(start, end + 1):
+            parsed = _parse_conversation_row(rows[idx])
+            if parsed is None:
+                continue
+            key = (file_idx, idx)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(parsed)
+
+    selected.sort(key=lambda x: x[0])
+    return [[timestamp, speaker, content] for timestamp, speaker, content in selected]
