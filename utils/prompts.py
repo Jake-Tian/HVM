@@ -1241,22 +1241,24 @@ Your task is to decide whether the retrieved results are sufficient to answer th
    - return:
      - an updated question for the next retrieval round (more specific and focused on missing information)
      - a concise summary of what is already known from current results
-     - allocation for next-round retrieval between behavior and conversation (k=50 total)
+     - one search tool call for the next round (choose exactly one from the provided search methods)
 
 Output format:
 1. Answer: True or False,
 2. Content: the selected option (e.g., "A") if Answer=True, otherwise updated question for next round,
 3. Summary: None if Answer=True, otherwise concise summary of current search results
-4. total_search_k: int or None
-5. k_behavior: int or None
-6. k_conversation: int or None
-7. speaker_strict: list[str] or None
+4. tool_name: str or None
+5. target: str or None
+6. total_search_k: int or None
+7. k_behavior: int or None
+8. k_conversation: int or None
+9. speaker_strict: list[str] or None
 
 Constraints:
 - If `answer=true`:
   - `content` must be exactly one option label: `"A"`, `"B"`, `"C"`, or `"D"`.
   - `summary` must be None.
-  - `total_search_k`, `k_behavior`, `k_conversation`, `speaker_strict` must be null.
+  - `tool_name`, `target`, `total_search_k`, `k_behavior`, `k_conversation`, `speaker_strict` must be null.
 - If `answer=false`:
   - `content` must be a better retrieval question, not an answer.
   - `content` should target missing evidence that can distinguish among options.
@@ -1273,6 +1275,32 @@ Constraints:
     - use explicit names when dialogue between specific speakers is needed
     - map first-person references ("I", "me", "my") to "Jake" only if speaker filtering is helpful
     - otherwise use null
+  - choose exactly ONE tool from:
+    ["general_search", "evidence_linker", "search_before", "search_after", "search_first", "search_last"]
+  - tool usage guidance:
+    - `general_search`: default semantic retrieval. Use when you just need the most relevant evidence without extra temporal constraints.
+    - `evidence_linker`: use when clues are scattered and require multi-hop deduction across behavior + conversation.
+    - `search_before`: temporal-backward retrieval. Use when the question asks what happened before a known event/line (`target`).
+    - `search_after`: temporal-forward retrieval. Use when the question asks what happened after a known event/line (`target`).
+    - `search_first`: earliest-occurrence retrieval. Use when the question asks who/what happened first or earliest.
+    - `search_last`: latest-occurrence retrieval. Use when the question asks who/what happened last or most recently.
+  - tool-selection policy (important):
+    - avoid repeating the same tool with nearly the same query if the previous round did not add decisive evidence.
+    - if two consecutive rounds are still "insufficient" with similar summaries, you MUST switch tool (or switch to a clearly different retrieval strategy).
+    - for location-before questions ("where ... before"), prefer `search_before` with a concrete `target` line when possible.
+    - when evidence is split across behavior and conversation and requires deduction, prefer `evidence_linker`.
+    - use `general_search` mainly for broad first-pass recall, not for repeated fallback loops.
+    - during rounds 2-4, try at least one non-`general_search` tool unless current evidence is already sufficient to answer.
+  - lexical bridging:
+    - when an object may have aliases (e.g., marker/pen/pencil/chalk), include those aliases in `content` to improve retrieval coverage.
+    - preserve key entities and temporal cues from current evidence in the rewritten `content`.
+  - set `tool_name` to that method name.
+  - `target` is REQUIRED when `tool_name` is `search_before` or `search_after`.
+  - `target` is OPTIONAL when `tool_name` is `evidence_linker` (set when an anchor line is helpful).
+  - for `general_search`, `search_first`, `search_last`, `target` must be null.
+  - Use `content` as `search_content` for the selected tool call.
+  - The selected tool should use (`total_search_k`, `k_behavior`, `k_conversation`) as allocation input.
+  - (`k_behavior` + `k_conversation`) must equal `total_search_k`.
 - Do NOT output markdown or extra text.
 - Reuse concrete entities/timestamps from retrieved results when helpful.
 
@@ -1280,6 +1308,7 @@ Decision guidance:
 - Set `answer=true` when current evidence can reasonably eliminate other options and support one best option.
 - Continue searching (`answer=false`) when key evidence is truly missing or multiple options remain similarly plausible.
 - If one option is clearly more supported than others, answer now.
+- Do not keep issuing near-identical `general_search` requests across rounds without changing strategy.
 
 Now process the following input:
 """

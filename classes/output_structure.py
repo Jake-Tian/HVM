@@ -54,6 +54,8 @@ class AnswerWithSearchResultsOutput(BaseModel):
     answer: bool
     content: str
     summary: str | None
+    tool_name: str | None
+    target: str | None
     total_search_k: int | None
     k_behavior: int | None
     k_conversation: int | None

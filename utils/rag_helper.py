@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from utils.search import (
+    evidence_linker,
+    general_search,
+    search_after,
+    search_before,
+    search_behavior,
+    search_conversation,
+    search_first,
+    search_last,
+)
+
 
 def normalize_option_label(value: str | None) -> str | None:
     if value is None:
@@ -101,6 +114,77 @@ def organize_results_temporal(
     )
 
 
+def organize_results_for_llm(
+    behavior_hits: list[list[str]],
+    conversation_hits: list[list[str]],
+    retrieval_method: str = "default",
+    target: str | None = None,
+) -> str:
+    """
+    Format retrieved results for the reasoning prompt.
+    - Default: chronological (same as organize_results_temporal).
+    - search_before/search_after: include target line.
+    - search_before: reverse temporal order in the active source block,
+      with target line pinned at the top.
+    """
+    if retrieval_method not in {"search_before", "search_after"}:
+        return organize_results_temporal(behavior_hits, conversation_hits)
+
+    def _build_behavior_lines(rows: list[list[str]]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for row in rows:
+            if len(row) < 2:
+                continue
+            ts, content = row[0], row[1]
+            out.append((ts, f"{timestamp_to_hhmm(ts)} {content}"))
+        return out
+
+    def _build_conversation_lines(rows: list[list[str]]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        for row in rows:
+            if len(row) < 3:
+                continue
+            ts, speaker, content = row[0], row[1], row[2]
+            out.append((ts, f"{timestamp_to_hhmm(ts)} {speaker}: {content}"))
+        return out
+
+    behavior_lines = _build_behavior_lines(behavior_hits)
+    conversation_lines = _build_conversation_lines(conversation_hits)
+
+    behavior_lines.sort(key=lambda x: x[0])
+    conversation_lines.sort(key=lambda x: x[0])
+
+    # For search_before, show nearest previous evidence first.
+    if retrieval_method == "search_before":
+        if behavior_lines and not conversation_lines:
+            behavior_lines = list(reversed(behavior_lines))
+        if conversation_lines and not behavior_lines:
+            conversation_lines = list(reversed(conversation_lines))
+
+    target_line = f"[TARGET] {target}" if target else None
+
+    if behavior_lines:
+        behavior_body = "\n".join(item[1] for item in behavior_lines)
+        if target_line:
+            behavior_body = f"{target_line}\n{behavior_body}"
+    else:
+        behavior_body = "(none)"
+
+    if conversation_lines:
+        conversation_body = "\n".join(item[1] for item in conversation_lines)
+        if target_line:
+            conversation_body = f"{target_line}\n{conversation_body}"
+    else:
+        conversation_body = "(none)"
+
+    return (
+        "behavior:\n"
+        f"{behavior_body}\n\n"
+        "conversation:\n"
+        f"{conversation_body}"
+    )
+
+
 def safe_allocation(k_behavior: int | None, k_conversation: int | None) -> tuple[int, int]:
     kb = int(k_behavior) if isinstance(k_behavior, int) else 25
     kc = int(k_conversation) if isinstance(k_conversation, int) else 25
@@ -154,3 +238,115 @@ def harmonize_allocation_with_total(
     kb = max(0, min(target, kb))
     kc = target - kb
     return kb, kc
+
+
+def split_tool_search_output(tool_output: dict) -> tuple[list[list[str]], list[list[str]]]:
+    if not isinstance(tool_output, dict):
+        return [], []
+    # general_search / evidence_linker / search_first / search_last output
+    if "behavior" in tool_output or "conversation" in tool_output:
+        behavior_hits = tool_output.get("behavior") or []
+        conversation_hits = tool_output.get("conversation") or []
+        return behavior_hits, conversation_hits
+    # search_before / search_after output
+    source = tool_output.get("source")
+    results = tool_output.get("results") or []
+    if source == "behavior":
+        return results, []
+    if source == "conversation":
+        return [], results
+    return [], []
+
+
+def run_search_for_round(
+    round_id: int,
+    search_question: str,
+    k_behavior: int,
+    k_conversation: int,
+    speaker_strict: list[str] | None,
+    behavior_dir: str | Path,
+    conversation_dir: str | Path,
+    planned_tool_name: str | None,
+    planned_target: str | None,
+) -> tuple[list[list[str]], list[list[str]], str]:
+    """
+    Execute retrieval for one round.
+    - Round 1 and 5: normal search_behavior/search_conversation.
+    - Rounds 2-4: prefer tool search when valid; fallback to normal search.
+    """
+    can_use_tool = 2 <= round_id <= 4
+    allocation = {
+        "k_behavior": k_behavior,
+        "k_conversation": k_conversation,
+        "total_search_k": k_behavior + k_conversation,
+    }
+
+    if can_use_tool and planned_tool_name:
+        try:
+            if planned_tool_name == "general_search":
+                tool_output = general_search(
+                    search_content=search_question,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                    speaker_strict=speaker_strict,
+                )
+            elif planned_tool_name == "evidence_linker":
+                tool_output = evidence_linker(
+                    search_content=search_question,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                    speaker_strict=speaker_strict,
+                    target=planned_target,
+                )
+            elif planned_tool_name == "search_first":
+                tool_output = search_first(
+                    search_content=search_question,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                )
+            elif planned_tool_name == "search_last":
+                tool_output = search_last(
+                    search_content=search_question,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                )
+            elif planned_tool_name == "search_before" and planned_target:
+                tool_output = search_before(
+                    search_content=search_question,
+                    target=planned_target,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                )
+            elif planned_tool_name == "search_after" and planned_target:
+                tool_output = search_after(
+                    search_content=search_question,
+                    target=planned_target,
+                    allocation=allocation,
+                    behavior_dir=behavior_dir,
+                    conversation_dir=conversation_dir,
+                )
+            else:
+                raise ValueError(
+                    f"Invalid tool configuration: tool={planned_tool_name}, target={planned_target}"
+                )
+            behavior_hits, conversation_hits = split_tool_search_output(tool_output)
+            return behavior_hits, conversation_hits, planned_tool_name
+        except Exception as tool_error:
+            print(
+                f"[Round {round_id}] tool search failed ({planned_tool_name}): {tool_error}. "
+                "Falling back to normal search."
+            )
+
+    behavior_hits = search_behavior(search_question, k_behavior, behavior_dir)
+    conversation_hits = search_conversation(
+        search_question,
+        speaker_strict,
+        conversation_dir,
+        k=k_conversation,
+    )
+    return behavior_hits, conversation_hits, "default"
