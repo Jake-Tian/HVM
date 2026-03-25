@@ -3,7 +3,7 @@
 Reorganize A1_JAKE transcript SRT files by day: English lines only, with embeddings.
 
 Reads:  data/EgoLife/EgoLifeCap/Transcript/A1_JAKE/DAY*/A1_JAKE_DAY*_*.srt
-Writes: data/conversations/DAY1.json ... DAY7.json
+Writes: data/EgoLife/conversations/DAY1.json ... DAY7.json
 
 Each entry is a dict:
   start_time: str (hhmmss, wall clock: filename hour + SRT mm:ss)
@@ -29,7 +29,7 @@ SPEAKER_LINE_PATTERN = re.compile(r"^\s*([^:]+):\s*(.*)$")
 # CJK (common) — skip these lines for English content selection
 CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 
-OUTPUT_DIR = Path("data/conversations")
+OUTPUT_DIR = Path("data/EgoLife/conversations")
 EMBED_BATCH_SIZE = 100
 DEFAULT_INPUT_ROOT = Path("data/EgoLife/EgoLifeCap/Transcript/A1_JAKE")
 

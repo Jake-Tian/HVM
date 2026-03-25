@@ -1009,47 +1009,6 @@ def main():
                 traceback.print_exc()
                 main_result = str(e)
 
-            try:
-                result_k30 = reason_k30(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_k30["final_answer"])
-                result_k30["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_k30 = str(e)
-
-            try:
-                result_no_allocation = reason_no_allocation(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_no_allocation["final_answer"])
-                result_no_allocation["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_no_allocation = str(e)
-
-            # try:
-            #     result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
-            #     evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
-            #     result_no_video_rewatch["evaluate_correct"] = evaluate_correct
-            # except Exception as e:
-            #     print(f"Error processing question {question_id}: {e}")
-            #     traceback.print_exc()
-            #     result_no_video_rewatch = str(e)
-
-            # reasoning_results[question_id] = {
-            #     "question": question,
-            #     "ground_truth_answer": answer,
-            #         # Backward-compatible main payload key.
-            #         "reasoning": main_result,
-            #         "ablations": {
-            #             "k30": result_k30,
-            #             "no_allocation": result_no_allocation,
-            #             "no_video_rewatch": result_no_video_rewatch,
-            #         },
-            #     "timestamp": video_question.get("timestamp"),
-            #     "type": video_question.get("type"),
-            # }
-
         with open(output_json_path, "w") as f:
             json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
         print(f"\n✓ Saved reasoning results for {video_name} to {output_json_path}")

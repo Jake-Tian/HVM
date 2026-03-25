@@ -385,6 +385,20 @@ Now summarize the following conversation:
 """
 
 
+prompt_summarize_conversation = """
+You are given a conversation between several characters.
+
+Your task is to summarize the conversation into a concise, narrative paragraph.
+
+Rules:
+- Write a single, coherent paragraph (3-5 sentences)
+- Use natural, flowing language (not a bulleted list)
+- Keep character names as provided (e.g., <Shure>, <Tasha>, <Katrina>)
+
+Now summarize the following conversation:
+"""
+
+
 #--------------------------------
 # Reasoning Prompts
 #--------------------------------

@@ -85,7 +85,6 @@ def process_full_video(video_name):
                     behaviors = behaviors[1:]
                     old_name = equivalence_parts[0].strip()
                     new_name = equivalence_parts[1].strip()
-                    graph.rename_character(old_name, new_name)
                     if old_name in appearance_dict:
                         appearance_dict[new_name] = appearance_dict[old_name]
                         del appearance_dict[old_name]
@@ -147,9 +146,6 @@ def process_full_video(video_name):
             print(f"Inserted {len(triples)} triples into graph for clip {clip_id}")
 
             equivalence_list = merge_character_appearances(characters_appearance, appearance_dict)
-            if equivalence_list:
-                for equivalence in equivalence_list:
-                    graph.rename_character(equivalence[0], equivalence[1])
 
             # Store episodic memory for this clip
             episodic_memory[clip_id] = {

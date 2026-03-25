@@ -674,8 +674,8 @@ def main():
     sys.stdout = Tee(log_file)
 
     qa_root = Path("data/questions")
-    behavior_root = Path("data/behaviors")
-    conversation_root = Path("data/conversations")
+    behavior_root = Path("data/EgoLife/behaviors")
+    conversation_root = Path("data/EgoLife/conversations")
     output_root = Path("results_tool")
     output_root.mkdir(parents=True, exist_ok=True)
     summary_path = output_root / "by_day_summary.json"
@@ -716,8 +716,8 @@ if __name__ == "__main__":
     
     day = "DAY2"
     qa_root = Path("data/questions")
-    behavior_root = Path("data/behaviors")
-    conversation_root = Path("data/conversations")
+    behavior_root = Path("data/EgoLife/behaviors")
+    conversation_root = Path("data/EgoLife/conversations")
     output_root = Path("results_tool")
     output_root.mkdir(parents=True, exist_ok=True)
     summary_path = output_root / "by_day_summary.json"

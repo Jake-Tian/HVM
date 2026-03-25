@@ -21,7 +21,7 @@ from utils.llm import get_multiple_embeddings
 
 FILENAME_DAY_PATTERN = re.compile(r".*_(DAY[1-7])_\d{8}\.jsonl$")
 CUSTOM_ID_TIME_PATTERN = re.compile(r".*-(\d{6})-(\d{6})$")
-OUTPUT_DIR = Path("data/behaviors")
+OUTPUT_DIR = Path("data/EgoLife/behaviors")
 EMBED_BATCH_SIZE = 100
 
 

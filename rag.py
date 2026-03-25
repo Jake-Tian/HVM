@@ -305,8 +305,8 @@ def main():
     sys.stdout = Tee(log_file)
 
     qa_root = Path("data/questions")
-    behavior_root = Path("data/behaviors")
-    conversation_root = Path("data/conversations")
+    behavior_root = Path("data/EgoLife/behaviors")
+    conversation_root = Path("data/EgoLife/conversations")
     output_root = Path("results")
     output_root.mkdir(parents=True, exist_ok=True)
     summary_path = output_root / "by_day_summary.json"
@@ -354,8 +354,8 @@ def main():
 
 if __name__ == "__main__":
     
-    behavior_dir = Path("data/behaviors/DAY1.json")
-    conversation_dir = Path("data/conversations/DAY1.json")
+    behavior_dir = Path("data/EgoLife/behaviors/DAY1.json")
+    conversation_dir = Path("data/EgoLife/conversations/DAY1.json")
     question = "Where was the black marker in Shure's hand before?"
     multiple_choice_options = {
         "A": "In my room",
