@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 
 # Memorization Structures
+class TimeTriple(BaseModel):
+    time: str
+    triple: list[str]
+
+class TimeTripleList(BaseModel):
+    triples: list[TimeTriple]
+
 class Appearance(BaseModel):
     name: str
     appearance: str
@@ -36,6 +43,27 @@ class ParseQueryOutputNoAllocation(BaseModel):
     query_triples: list[list[str | float | None]]
     spatial_constraint: str | None
     speaker_strict: list[str] | None
+
+class AllocateSearchOutput(BaseModel):
+    k_behavior: int
+    k_conversation: int
+    speaker_strict: list[str] | None
+    reasoning: str
+
+class AnswerWithSearchResultsOutput(BaseModel):
+    answer: bool
+    content: str
+    summary: str | None
+    tool_name: str | None
+    target: str | None
+    total_search_k: int | None
+    k_behavior: int | None
+    k_conversation: int | None
+    speaker_strict: list[str] | None
+
+class AnswerWithSearchResultsFinalOutput(BaseModel):
+    content: str
+    summary: str
 
 class GraphOutputFormat(BaseModel):
     answer: bool
