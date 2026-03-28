@@ -1,651 +1,174 @@
-from __future__ import annotations
+# python -m utils.search
 
-import json
-import re
-from pathlib import Path
-
-import numpy as np
-
-from utils.llm import get_embedding
+import pickle
+from classes.hetero_graph import HeteroGraph
+from classes.output_structure import ParseQueryOutput
+from utils.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
 
 
-def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    a = np.array(vec1, dtype=float)
-    b = np.array(vec2, dtype=float)
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0.0:
-        return -1.0
-    return float(np.dot(a, b) / denom)
-
-
-def _collect_json_files(file_directory: str | Path) -> list[Path]:
-    target = Path(file_directory)
-    if not target.exists():
-        raise FileNotFoundError(f"Path not found: {target}")
-    if target.is_file():
-        return [target]
-    return sorted(target.glob("*.json"))
-
-
-def _parse_behavior_row(row) -> tuple[str, str] | None:
-    if not isinstance(row, list) or len(row) < 2:
-        return None
-    timestamp, content = row[0], row[1]
-    if not isinstance(timestamp, str) or not isinstance(content, str):
-        return None
-    return timestamp, content
-
-
-def _parse_conversation_row(row) -> tuple[str, str, str] | None:
-    if not isinstance(row, dict):
-        return None
-    timestamp = row.get("start_time")
-    speaker = row.get("speaker")
-    content = row.get("content")
-    if not isinstance(timestamp, str) or not isinstance(speaker, str) or not isinstance(content, str):
-        return None
-    return timestamp, speaker, content
-
-
-def search_behavior(
-    question: str,
-    k: int,
-    file_directory: str | Path,
-    context_window: int = 1,
-) -> list[list[str]]:
+def search_with_parse(query, graph, parse_query_response):
     """
-    Search behavior files and return top-k hits expanded with context.
-    For each selected hit, include `context_window` rows before and after.
-
-    Behavior file format:
-      [
-        [start_time_hhmmss, content, embedding],
-        ...
-      ]
+    Search the graph and return search results based on a parsed query.
+    
+    This function:
+    1. Parses the parse_query_response to extract search strategy
+    2. Searches high-level edges, low-level edges, and conversations
+    3. Formats all results into a single natural language string
+    4. Returns the formatted search results
+    
+    Args:
+        query: Natural language query string (used for conversation search)
+        graph: HeteroGraph instance to search
+        parse_query_response: Parsed output from prompt_parse_query
+            (typically ParseQueryOutput; may also be tuple(result, tokens))
+    
+    Returns:
+        str: Formatted string containing all search results in natural language
     """
-    if k <= 0:
-        return []
+    # Handle generate_text_response(...) outputs that may be (parsed_obj, tokens)
+    if isinstance(parse_query_response, tuple):
+        if len(parse_query_response) == 0:
+            raise ValueError("parse_query_response tuple is empty")
+        parse_query_response = parse_query_response[0]
 
-    query_embedding = get_embedding(question)
-    scored: list[tuple[float, int, int]] = []  # score, file_idx, row_idx
-    file_data: list[list] = []
+    # ParseQueryOutput object (new expected format)
+    if isinstance(parse_query_response, ParseQueryOutput):
+        query_triples = parse_query_response.query_triples
+        spatial_constraint = parse_query_response.spatial_constraint
+        speaker_strict = parse_query_response.speaker_strict
+        k_high_level = parse_query_response.allocation.k_high_level
+        k_appearance = parse_query_response.allocation.k_appearance
+        k_low_level = parse_query_response.allocation.k_low_level
+        k_conversations = parse_query_response.allocation.k_conversations
+    # Backward compatibility for dict payloads
+    elif isinstance(parse_query_response, dict):
+        triple = parse_query_response.get("query_triple")
+        triples = parse_query_response.get("query_triples")
+        spatial_constraint = parse_query_response.get("spatial_constraint")
+        speaker_strict = parse_query_response.get("speaker_strict")
+        allocation = parse_query_response.get("allocation", {})
 
-    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
-        with json_path.open("r", encoding="utf-8") as infile:
-            data = json.load(infile)
-        file_data.append(data if isinstance(data, list) else [])
+        if triples and isinstance(triples, list):
+            query_triples = triples
+        elif triple:
+            query_triples = [triple]
+        else:
+            raise ValueError("query_triple(s) not found in strategy")
 
-        for row_idx, item in enumerate(file_data[file_idx]):
-            if not isinstance(item, list) or len(item) < 3:
-                continue
-            parsed = _parse_behavior_row(item)
-            if parsed is None:
-                continue
-            _, _ = parsed
-            embedding = item[2]
-            if not isinstance(embedding, list):
-                continue
-            score = _cosine_similarity(query_embedding, embedding)
-            scored.append((score, file_idx, row_idx))
+        # Ensure weight fields (indices 3,4,5) of each triple are float
+        normalized = []
+        for one_triple in query_triples:
+            if isinstance(one_triple, (list, tuple)) and len(one_triple) >= 6:
+                row = list(one_triple)
+                for idx in (3, 4, 5):
+                    if not isinstance(row[idx], (int, float)):
+                        try:
+                            row[idx] = float(row[idx])
+                        except (TypeError, ValueError):
+                            row[idx] = 1.0
+                normalized.append(row)
+            else:
+                normalized.append(one_triple if isinstance(one_triple, list) else list(one_triple))
+        query_triples = normalized
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    anchors = scored[:k]
-
-    selected: list[tuple[str, str]] = []
-    seen = set()
-    for _, file_idx, row_idx in anchors:
-        rows = file_data[file_idx]
-        start = max(0, row_idx - context_window)
-        end = min(len(rows) - 1, row_idx + context_window)
-        for idx in range(start, end + 1):
-            parsed = _parse_behavior_row(rows[idx])
-            if parsed is None:
-                continue
-            key = (file_idx, idx)
-            if key in seen:
-                continue
-            seen.add(key)
-            selected.append(parsed)
-
-    selected.sort(key=lambda x: x[0])
-    return [[timestamp, content] for timestamp, content in selected]
-
-
-def search_conversation(
-    question: str,
-    speaker_strict: list[str] | None,
-    file_directory: str | Path,
-    k: int = 50,
-    context_window: int = 1,
-) -> list[list[str]]:
-    """
-    Search conversation files and return top-k hits expanded with context.
-    For each selected hit, include `context_window` rows before and after.
-
-    Conversation file format:
-      [
-        {
-          "start_time": "hhmmss",
-          "speaker": "...",
-          "content": "...",
-          "embedding": [...]
-        },
-        ...
-      ]
-    """
-    if k <= 0:
-        return []
-
-    query_embedding = get_embedding(question)
-    speaker_filter = {s for s in speaker_strict} if speaker_strict else None
-    scored: list[tuple[float, int, int]] = []  # score, file_idx, row_idx
-    file_data: list[list] = []
-
-    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
-        with json_path.open("r", encoding="utf-8") as infile:
-            data = json.load(infile)
-        file_data.append(data if isinstance(data, list) else [])
-
-        for row_idx, item in enumerate(file_data[file_idx]):
-            parsed = _parse_conversation_row(item)
-            if parsed is None:
-                continue
-            _, speaker, _ = parsed
-            embedding = item.get("embedding")
-            if not isinstance(embedding, list):
-                continue
-            if speaker_filter is not None and speaker not in speaker_filter:
-                continue
-            score = _cosine_similarity(query_embedding, embedding)
-            scored.append((score, file_idx, row_idx))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    anchors = scored[:k]
-
-    selected: list[tuple[str, str, str]] = []
-    seen = set()
-    for _, file_idx, row_idx in anchors:
-        rows = file_data[file_idx]
-        start = max(0, row_idx - context_window)
-        end = min(len(rows) - 1, row_idx + context_window)
-        for idx in range(start, end + 1):
-            parsed = _parse_conversation_row(rows[idx])
-            if parsed is None:
-                continue
-            key = (file_idx, idx)
-            if key in seen:
-                continue
-            seen.add(key)
-            selected.append(parsed)
-
-    selected.sort(key=lambda x: x[0])
-    return [[timestamp, speaker, content] for timestamp, speaker, content in selected]
-
-
-def _to_hhmm(timestamp: str) -> str:
-    ts = (timestamp or "").strip()
-    if len(ts) >= 4 and ts[:4].isdigit():
-        return f"{ts[:2]}:{ts[2:4]}"
-    return "??:??"
-
-
-def _timestamp_key(timestamp: str) -> int:
-    ts = (timestamp or "").strip()
-    return int(ts) if ts.isdigit() else 10**12
-
-
-def _normalize_allocation(allocation: dict | int | None) -> tuple[int, int]:
-    if isinstance(allocation, int):
-        kb = max(0, allocation // 2)
-        kc = max(0, allocation - kb)
-    elif isinstance(allocation, dict):
-        kb = max(0, int(allocation.get("k_behavior", 0) or 0))
-        kc = max(0, int(allocation.get("k_conversation", 0) or 0))
-        total_k = allocation.get("total_search_k")
-        if isinstance(total_k, int):
-            target = max(1, min(50, total_k))
-            cur = kb + kc
-            if cur == 0:
-                kb = target // 2
-                kc = target - kb
-            elif cur != target:
-                kb = int(round(kb * target / cur))
-                kb = max(0, min(target, kb))
-                kc = target - kb
+        k_high_level = allocation.get("k_high_level", 5)
+        k_appearance = allocation.get("k_appearance", 0)
+        k_low_level = allocation.get("k_low_level", 10)
+        k_conversations = allocation.get("k_conversations", 10)
     else:
-        kb, kc = 25, 25
-
-    total = kb + kc
-    if total == 0:
-        return 25, 25
-    if total <= 50:
-        return kb, kc
-    kb = int(round(kb * 50 / total))
-    return kb, 50 - kb
-
-
-def _build_behavior_rows(file_directory: str | Path) -> list[dict]:
-    rows: list[dict] = []
-    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
-        with json_path.open("r", encoding="utf-8") as infile:
-            data = json.load(infile)
-        if not isinstance(data, list):
-            continue
-        for row_idx, item in enumerate(data):
-            if not isinstance(item, list) or len(item) < 3:
-                continue
-            parsed = _parse_behavior_row(item)
-            if parsed is None:
-                continue
-            ts, content = parsed
-            emb = item[2]
-            if not isinstance(emb, list):
-                continue
-            line = f"[{_to_hhmm(ts)}] [behavior] {content}"
-            rows.append(
-                {
-                    "source": "behavior",
-                    "timestamp": ts,
-                    "content": content,
-                    "speaker": None,
-                    "embedding": emb,
-                    "file_idx": file_idx,
-                    "row_idx": row_idx,
-                    "line": line,
-                }
-            )
-    rows.sort(key=lambda r: (_timestamp_key(r["timestamp"]), r["file_idx"], r["row_idx"]))
-    return rows
-
-
-def _build_conversation_rows(file_directory: str | Path) -> list[dict]:
-    rows: list[dict] = []
-    for file_idx, json_path in enumerate(_collect_json_files(file_directory)):
-        with json_path.open("r", encoding="utf-8") as infile:
-            data = json.load(infile)
-        if not isinstance(data, list):
-            continue
-        for row_idx, item in enumerate(data):
-            parsed = _parse_conversation_row(item)
-            if parsed is None:
-                continue
-            ts, speaker, content = parsed
-            emb = item.get("embedding")
-            if not isinstance(emb, list):
-                continue
-            line = f"[{_to_hhmm(ts)}] [conversation] {speaker}: {content}"
-            rows.append(
-                {
-                    "source": "conversation",
-                    "timestamp": ts,
-                    "content": content,
-                    "speaker": speaker,
-                    "embedding": emb,
-                    "file_idx": file_idx,
-                    "row_idx": row_idx,
-                    "line": line,
-                }
-            )
-    rows.sort(key=lambda r: (_timestamp_key(r["timestamp"]), r["file_idx"], r["row_idx"]))
-    return rows
-
-
-def _row_to_output(row: dict):
-    if row["source"] == "behavior":
-        return [row["timestamp"], row["content"]]
-    return [row["timestamp"], row["speaker"], row["content"]]
-
-
-def _search_topk_rows(rows: list[dict], search_content: str, k: int) -> list[dict]:
-    if k <= 0 or not rows:
-        return []
-    qemb = get_embedding(search_content)
-    scored = []
-    for i, r in enumerate(rows):
-        sim = _cosine_similarity(qemb, r["embedding"])
-        scored.append((sim, i))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [rows[i] for _, i in scored[:k]]
-
-
-def _normalize_text(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip().lower())
-
-
-def _find_target_index(rows: list[dict], target: str) -> int | None:
-    if not rows:
-        return None
-    t = _normalize_text(target)
-    # 1) strict line match
-    for i, r in enumerate(rows):
-        if _normalize_text(r["line"]) == t:
-            return i
-    # 2) rich variants
-    for i, r in enumerate(rows):
-        variants = [r["line"], r["content"]]
-        if r["source"] == "conversation":
-            variants.append(f'{r["speaker"]}: {r["content"]}')
-            variants.append(f'[{_to_hhmm(r["timestamp"])}] {r["speaker"]}: {r["content"]}')
-        else:
-            variants.append(f'[{_to_hhmm(r["timestamp"])}] {r["content"]}')
-        if any(_normalize_text(v) == t for v in variants):
-            return i
-    # 3) containment fallback
-    for i, r in enumerate(rows):
-        if t in _normalize_text(r["line"]) or _normalize_text(r["content"]) in t:
-            return i
-    return None
-
-
-def general_search(
-    search_content: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-    speaker_strict: list[str] | None = None,
-) -> dict:
-    """
-    Normal similarity search.
-    Input: search_content, allocation
-    Return top-k most similar results from behavior/conversation.
-    """
-    kb, kc = _normalize_allocation(allocation)
-    behavior_rows = _build_behavior_rows(behavior_dir)
-    conversation_rows = _build_conversation_rows(conversation_dir)
-    if speaker_strict:
-        spk = set(speaker_strict)
-        conversation_rows = [r for r in conversation_rows if r["speaker"] in spk]
-
-    b_hits = _search_topk_rows(behavior_rows, search_content, kb)
-    c_hits = _search_topk_rows(conversation_rows, search_content, kc)
-    return {
-        "behavior": [_row_to_output(r) for r in b_hits],
-        "conversation": [_row_to_output(r) for r in c_hits],
-    }
-
-
-def _build_linker_rows_from_hits(
-    behavior_hits: list[list[str]],
-    conversation_hits: list[list[str]],
-) -> list[dict]:
-    rows: list[dict] = []
-    for row in behavior_hits:
-        if len(row) < 2:
-            continue
-        ts, content = row[0], row[1]
-        rows.append(
-            {
-                "source": "behavior",
-                "timestamp": ts,
-                "content": content,
-                "speaker": None,
-                "line": f"[{_to_hhmm(ts)}] [behavior] {content}",
-            }
+        raise TypeError(
+            "parse_query_response must be ParseQueryOutput, dict, or tuple(parsed, tokens). "
+            f"Got: {type(parse_query_response).__name__}"
         )
-    for row in conversation_hits:
-        if len(row) < 3:
-            continue
-        ts, speaker, content = row[0], row[1], row[2]
-        rows.append(
-            {
-                "source": "conversation",
-                "timestamp": ts,
-                "content": content,
-                "speaker": speaker,
-                "line": f"[{_to_hhmm(ts)}] [conversation] {speaker}: {content}",
-            }
+
+    # Search the graph
+    try:
+        # Search in two independent parts with separate k budgets.
+        high_level_edges = graph.search_high_level_edges(query_triples, max(0, k_high_level))
+        print("High-level edges searched: ", len(high_level_edges))
+        appearance_edges = graph.search_appearance_edges(query_triples, max(0, k_appearance))
+        
+        # Search low-level edges
+        low_level_edges = graph.search_low_level_edges(
+            query_triples, 
+            k_low_level,
+            spatial_constraint
         )
-    rows.sort(key=lambda r: _timestamp_key(r["timestamp"]))
-    return rows
-
-
-def _query_alias_expansion(search_content: str) -> set[str]:
-    text = _normalize_text(search_content)
-    terms = set(re.findall(r"[a-z0-9]+", text))
-    alias_groups = [
-        {"marker", "pen", "pencil", "chalk", "whiteboard"},
-        {"upstairs", "up", "second", "floor"},
-        {"table", "desk"},
-        {"before", "earlier", "previous", "prior"},
-        {"after", "later", "next", "following"},
-        {"where", "location", "placed", "put"},
-        {"hold", "holding", "hand"},
-    ]
-    for group in alias_groups:
-        if terms & group:
-            terms |= group
-    return terms
-
-
-def _row_link_score(row: dict, query_terms: set[str], anchor_idx: int | None, idx: int) -> float:
-    row_text = _normalize_text(f"{row.get('content', '')} {row.get('speaker', '')}")
-    row_terms = set(re.findall(r"[a-z0-9]+", row_text))
-    overlap = len(query_terms & row_terms)
-    score = float(overlap)
-    if "table" in row_terms or "floor" in row_terms or "stairs" in row_terms:
-        score += 0.5
-    if "marker" in row_terms or "pen" in row_terms or "pencil" in row_terms:
-        score += 0.75
-    if anchor_idx is not None:
-        score += 1.0 / (1.0 + abs(idx - anchor_idx))
-    return score
-
-
-def evidence_linker(
-    search_content: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-    speaker_strict: list[str] | None = None,
-    target: str | None = None,
-    max_chain_steps: int = 4,
-) -> dict:
-    """
-    Build a compact cross-source evidence chain from retrieved candidates.
-    This tool is useful for deduction questions where facts are spread across
-    behavior and conversation lines.
-    """
-    candidates = general_search(
-        search_content=search_content,
-        allocation=allocation,
-        behavior_dir=behavior_dir,
-        conversation_dir=conversation_dir,
-        speaker_strict=speaker_strict,
-    )
-    behavior_hits = candidates.get("behavior") or []
-    conversation_hits = candidates.get("conversation") or []
-    rows = _build_linker_rows_from_hits(behavior_hits, conversation_hits)
-    if not rows:
-        return {"behavior": [], "conversation": [], "chain": [], "summary": "(none)"}
-
-    query_terms = _query_alias_expansion(search_content)
-    anchor_idx: int | None = None
-    if target:
-        t = _normalize_text(target)
-        for i, r in enumerate(rows):
-            if t in _normalize_text(r["line"]) or t in _normalize_text(r["content"]):
-                anchor_idx = i
-                break
-
-    scored = []
-    for i, r in enumerate(rows):
-        s = _row_link_score(r, query_terms, anchor_idx, i)
-        scored.append((s, i))
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    picked_idx = sorted(i for _, i in scored[: max(1, max_chain_steps)])
-    picked_rows = [rows[i] for i in picked_idx]
-
-    chain = []
-    b_out: list[list[str]] = []
-    c_out: list[list[str]] = []
-    for r in picked_rows:
-        chain.append(
-            {
-                "timestamp": r["timestamp"],
-                "source": r["source"],
-                "text": r["line"],
-                "why_selected": "query overlap and temporal bridging",
-            }
+        print("Low-level edges searched: ", len(low_level_edges))
+        
+        # Search conversations (use original query string)
+        conversation_results = graph.search_conversations(
+            query,
+            k_conversations,
+            speaker_strict
         )
-        if r["source"] == "behavior":
-            b_out.append([r["timestamp"], r["content"]])
-        else:
-            c_out.append([r["timestamp"], r["speaker"], r["content"]])
+        print("Conversations searched: ", len(conversation_results))
+        
+    except Exception as e:
+        raise Exception(f"Error searching graph: {e}")
 
-    summary = " -> ".join(item["text"] for item in chain[:3])
-    return {
-        "behavior": b_out,
-        "conversation": c_out,
-        "chain": chain,
-        "summary": summary if summary else "(none)",
-    }
+    # Format results into strings
+    result_sections = []
+    
+    # Format high-level edges
+    if high_level_edges:
+        high_level_str = high_level_edges_to_string(high_level_edges)
+        if high_level_str:
+            result_sections.append("**High-Level Information (Character Attributes and Relationships): **\n")
+            result_sections.append(high_level_str)
+            result_sections.append("")
 
-
-def search_before(
-    search_content: str,
-    target: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-) -> dict:
-    """
-    Search only BEFORE a target line.
-    Target should be a line from previously searched behavior/conversation results.
-    """
-    kb, kc = _normalize_allocation(allocation)
-    behavior_rows = _build_behavior_rows(behavior_dir)
-    conversation_rows = _build_conversation_rows(conversation_dir)
-
-    b_idx = _find_target_index(behavior_rows, target)
-    c_idx = _find_target_index(conversation_rows, target)
-    if b_idx is None and c_idx is None:
-        raise ValueError("Target not found in behavior or conversation data.")
-
-    # enforce single-source temporal search
-    if b_idx is not None and c_idx is None:
-        kc = 0
-        kb = kb if kb > 0 else 50
-        scope_rows = behavior_rows[:b_idx]
-        hits = _search_topk_rows(scope_rows, search_content, kb)
-        return {"source": "behavior", "results": [_row_to_output(r) for r in hits]}
-    if c_idx is not None and b_idx is None:
-        kb = 0
-        kc = kc if kc > 0 else 50
-        scope_rows = conversation_rows[:c_idx]
-        hits = _search_topk_rows(scope_rows, search_content, kc)
-        return {"source": "conversation", "results": [_row_to_output(r) for r in hits]}
-
-    # target appears in both; use larger allocated budget as tiebreak
-    if kb >= kc:
-        scope_rows = behavior_rows[:b_idx]
-        hits = _search_topk_rows(scope_rows, search_content, max(kb, 1))
-        return {"source": "behavior", "results": [_row_to_output(r) for r in hits]}
-    scope_rows = conversation_rows[:c_idx]
-    hits = _search_topk_rows(scope_rows, search_content, max(kc, 1))
-    return {"source": "conversation", "results": [_row_to_output(r) for r in hits]}
+    # Format appearance edges
+    if appearance_edges:
+        appearance_str = high_level_edges_to_string(appearance_edges)
+        if appearance_str:
+            result_sections.append("**Appearance Information: **\n")
+            result_sections.append(appearance_str)
+            result_sections.append("")
+    
+    # Format low-level edges
+    if low_level_edges:
+        low_level_str = low_level_edge_to_string(low_level_edges)
+        if low_level_str:
+            result_sections.append("**Low-Level Information (Actions and Events): **\n")
+            result_sections.append(low_level_str)
+            result_sections.append("")
+    
+    # Format conversations
+    if conversation_results:
+        conversation_str = graph.get_conversation_messages_with_context(conversation_results)
+        if conversation_str:
+            result_sections.append("**Conversations: **\n")
+            result_sections.append(conversation_str)
+    
+    # Combine all sections
+    graph_search_results = "\n".join(result_sections)
+    
+    # If no results found, return a message
+    if not graph_search_results.strip():
+        graph_search_results = "No relevant information found for this query."
+    
+    return graph_search_results
 
 
-def search_after(
-    search_content: str,
-    target: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-) -> dict:
-    """
-    Search only AFTER a target line.
-    """
-    kb, kc = _normalize_allocation(allocation)
-    behavior_rows = _build_behavior_rows(behavior_dir)
-    conversation_rows = _build_conversation_rows(conversation_dir)
-
-    b_idx = _find_target_index(behavior_rows, target)
-    c_idx = _find_target_index(conversation_rows, target)
-    if b_idx is None and c_idx is None:
-        raise ValueError("Target not found in behavior or conversation data.")
-
-    if b_idx is not None and c_idx is None:
-        kc = 0
-        kb = kb if kb > 0 else 50
-        scope_rows = behavior_rows[b_idx + 1 :]
-        hits = _search_topk_rows(scope_rows, search_content, kb)
-        return {"source": "behavior", "results": [_row_to_output(r) for r in hits]}
-    if c_idx is not None and b_idx is None:
-        kb = 0
-        kc = kc if kc > 0 else 50
-        scope_rows = conversation_rows[c_idx + 1 :]
-        hits = _search_topk_rows(scope_rows, search_content, kc)
-        return {"source": "conversation", "results": [_row_to_output(r) for r in hits]}
-
-    if kb >= kc:
-        scope_rows = behavior_rows[b_idx + 1 :]
-        hits = _search_topk_rows(scope_rows, search_content, max(kb, 1))
-        return {"source": "behavior", "results": [_row_to_output(r) for r in hits]}
-    scope_rows = conversation_rows[c_idx + 1 :]
-    hits = _search_topk_rows(scope_rows, search_content, max(kc, 1))
-    return {"source": "conversation", "results": [_row_to_output(r) for r in hits]}
-
-
-def search_first(
-    search_content: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-    similarity_threshold: float = 0.5,
-) -> dict:
-    """
-    Search from beginning and return lines with similarity >= threshold.
-    """
-    kb, kc = _normalize_allocation(allocation)
-    qemb = get_embedding(search_content)
-    behavior_rows = _build_behavior_rows(behavior_dir)
-    conversation_rows = _build_conversation_rows(conversation_dir)
-
-    b_out = []
-    for r in behavior_rows:
-        if len(b_out) >= kb:
-            break
-        if _cosine_similarity(qemb, r["embedding"]) >= similarity_threshold:
-            b_out.append(_row_to_output(r))
-
-    c_out = []
-    for r in conversation_rows:
-        if len(c_out) >= kc:
-            break
-        if _cosine_similarity(qemb, r["embedding"]) >= similarity_threshold:
-            c_out.append(_row_to_output(r))
-
-    return {"behavior": b_out, "conversation": c_out}
-
-
-def search_last(
-    search_content: str,
-    allocation: dict | int,
-    behavior_dir: str | Path,
-    conversation_dir: str | Path,
-    similarity_threshold: float = 0.5,
-) -> dict:
-    """
-    Search from end (latest to earliest) and return lines with similarity >= threshold.
-    """
-    kb, kc = _normalize_allocation(allocation)
-    qemb = get_embedding(search_content)
-    behavior_rows = list(reversed(_build_behavior_rows(behavior_dir)))
-    conversation_rows = list(reversed(_build_conversation_rows(conversation_dir)))
-
-    b_out = []
-    for r in behavior_rows:
-        if len(b_out) >= kb:
-            break
-        if _cosine_similarity(qemb, r["embedding"]) >= similarity_threshold:
-            b_out.append(_row_to_output(r))
-
-    c_out = []
-    for r in conversation_rows:
-        if len(c_out) >= kc:
-            break
-        if _cosine_similarity(qemb, r["embedding"]) >= similarity_threshold:
-            c_out.append(_row_to_output(r))
-
-    return {"behavior": b_out, "conversation": c_out}
+if __name__ == "__main__":
+    # Example usage
+    from utils.llm import generate_text_response
+    from utils.prompts import prompt_parse_query
+    
+    with open("data/semantic_memory/gym_01.pkl", "rb") as f:
+        graph = pickle.load(f)
+    query = "Which takeout should be taken to Anna?"
+    
+    try:
+        parse_query_response, _tokens = generate_text_response(
+            prompt_parse_query + "\n" + query,
+            ParseQueryOutput
+        )
+        result = search_with_parse(query, graph, parse_query_response)
+        print(result)
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        
