@@ -159,7 +159,7 @@ Examples:
 6. PRONOUN & POSSESSIVE RESOLUTION
 - NEVER use pronouns (his, her, their)
 - Replace possessives with explicit ownership:
-  - his wallet → John's wallet
+  - his wallet → <John>'s wallet
 - Default ownership to the **nearest subject** if ambiguous
 
 7. MULTIPLE RELATIONS
@@ -220,9 +220,13 @@ Now convert the following list of action sentences into triples:
 
 prompt_extract_timetriples = """
 You are given translated dense-caption text segments from an egocentric video.
-Each segment has a start timestamp and one short sentence.
+The input is a JSON array of segments. Each segment is exactly a two-element list:
+  `[start_timestamp, sentence]`
+- `start_timestamp`: 6-digit string `hhmmss` (same values you must use in output `time` fields).
+- `sentence`: the short caption text for that segment.
 
 Your task is to convert this text into a list of TimeTriple items.
+Characters in this video are only: <I>, <Alice>, <Tasha>, <Lucia>, <Katrina>, and <Shure>.
 
 ## Target schema
 - Output must match:
@@ -237,10 +241,63 @@ Your task is to convert this text into a list of TimeTriple items.
 - `triple` must always contain exactly 3 strings: [source, content, target]
 - If target is missing, use the literal string "null" (not Python null).
 
+## RULES: 
+
+1. SOURCE & TARGET (ENTITIES)
+- There are two types of entities:
+  - Characters (use verbatim names with angle brackets)
+  - Objects (nouns, physical or abstract)
+- **Character/Object format rule (STRICT)**:
+  - Characters: must keep angle brackets, e.g. `<I>`, `<Alice>`, `<Tasha>`, `<Lucia>`, `<Katrina>`, `<Shure>`.
+  - Objects: must **NOT** use angle brackets.
+  - If an object appears with angle brackets in input, remove them in output.
+- Copy entity names **verbatim** (except removing angle brackets from objects)
+- Use `null` if no target exists
+- Do **not** invent entities
+
+2. CONTENT (VERBS / RELATIONS)
+- Use **simple present tense** only  
+  Examples: walks, puts, looks at
+- Avoid progressive or continuous forms  
+  is walking → walks
+- Include relevant prepositions or direction
+  - turns left
+  - looks at
+  - moves forward
+- Include adverbs when present
+  - runs quickly
+  - smiles happily
+
+3. BODY PART MERGING
+- Merge body parts into the verb
+- Do NOT create body-part objects
+Examples:
+- "<Alice> hits <Tasha>'s head" → ["<Alice>", "hits head", "<Tasha>"]
+- "<Lucia> touches <Shure>'s shoulder" → ["<Lucia>", "touches shoulder", "<Shure>"]
+
+5. OBJECT HANDLING
+- Objects are nouns
+- NEVER wrap object nodes with angle brackets (`< >`)
+- Singularize plurals  
+  books → book
+- Keep adjectives attached to the object  
+  eg. "red cup"
+- Keep named objects verbatim  
+  eg. "bottle of Nescafe"
+- Split compound objects into separate triples
+  eg. "<Alice> picks up the book and the pen" → ["<Alice>", "picks up", "book"], ["<Alice>", "picks up", "pen"]
+
+6. PRONOUN & POSSESSIVE RESOLUTION
+- NEVER use pronouns (his, her, their)
+- Replace possessives with explicit ownership:
+  - his wallet → <Shure>'s wallet
+- Default ownership to the **nearest subject** if ambiguous
+
+
 ## Extraction rules
 1. Preserve chronology.
 2. Prefer concrete entities from the text:
-   - Characters should keep angle brackets if present (e.g., <Alice>, <robot>).
+   - Characters should keep angle brackets if present (e.g., <Tasha>, <Lucia>).
    - If no explicit character is named and the sentence uses first person ("I"), use "<I>" as source.
 3. Normalize actions to concise verb phrases in simple present tense.
 4. Keep important spatial/temporal modifiers in content when needed
@@ -250,18 +307,23 @@ Your task is to convert this text into a list of TimeTriple items.
 7. Do not invent entities not supported by the text.
 
 ## Good examples
-Input line:
-{"time":"110959","text":"I put my phone in the middle of the dining table."}
+Input segment:
+["110959", "I put my phone in the middle of the dining table."]
 Output triples:
  - TimeTriple(time="110959", triple=["<I>", "puts", "phone"])
-- TimeTriple(time="110959", triple=["phone", "is in the middle of", "dining table"])
+ - TimeTriple(time="110959", triple=["phone", "is in the middle of", "dining table"])
 
-Input line:
-{"time":"111005","text":"Katrina asked me a question."}
+Input segment:
+["111005", "Katrina asked me a question."]
 Output triples:
- - TimeTriple(time="111005", triple=["Katrina", "asks", "<I>"])
+ - TimeTriple(time="111005", triple=["<Katrina>", "asks", "<I>"])
 
-Now convert the following input segments:
+Input segment:
+["111012", "Tasha waves at Lucia."]
+Output triples:
+ - TimeTriple(time="111012", triple=["<Tasha>", "waves at", "<Lucia>"])
+
+Now convert the following input segments (JSON array of `[timestamp, text]` lists):
 """
 
 

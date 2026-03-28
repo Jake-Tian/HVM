@@ -68,8 +68,8 @@ def load_translated_jsonl(path: Path) -> list[dict]:
 def split_into_interval_dicts(rows: list[dict]) -> list[dict]:
     """
     Return a list of interval payloads.
-    Each interval payload contains a dictionary:
-      { "hhmmss": "translated_text", ... }
+    Each interval payload contains `events`: a list of `[hhmmss, translated_text]` pairs
+    (chronological), matching the timetriple prompt input format.
     """
     grouped: defaultdict[tuple[int, int], list[dict]] = defaultdict(list)
     for row in rows:
@@ -91,20 +91,21 @@ def split_into_interval_dicts(rows: list[dict]) -> list[dict]:
             else:
                 interval_dict[key] = value
         interval_start = f"{hour:02d}{interval_minute:02d}00"
+        events = [[k, v] for k, v in sorted(interval_dict.items())]
         interval_payloads.append(
             {
                 "interval_start": interval_start,
-                "events": interval_dict,
+                "events": events,
             }
         )
     return interval_payloads
 
 
-def build_interval_prompt(events: dict[str, str]) -> str:
+def build_interval_prompt(events: list[list[str]]) -> str:
     return prompt_extract_timetriples + "\n" + json.dumps(events, ensure_ascii=False)
 
 
-def extract_interval_triples(events: dict[str, str], retries: int = 1) -> tuple[list[dict], int]:
+def extract_interval_triples(events: list[list[str]], retries: int = 1) -> tuple[list[dict], int]:
     prompt = build_interval_prompt(events)
     attempts = retries + 1
     last_error: Exception | None = None
