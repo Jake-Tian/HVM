@@ -24,31 +24,13 @@ class ConversationSummary(BaseModel):
     characters_relationships: list[list[str | int | float]]
 
 # Reasoning Structures
-class ParseQueryAllocation(BaseModel):
-    k_high_level: int
-    k_low_level: int
-    k_conversations: int
-    k_appearance: int
-    total_k: int
-    reasoning: str
-
 class ParseQueryOutput(BaseModel):
     # [source, content, target, source_weight, content_weight, target_weight]
     query_triples: list[list[str | float | None]]
-    spatial_constraint: str | None
     speaker_strict: list[str] | None
-    allocation: ParseQueryAllocation
-
-class ParseQueryOutputNoAllocation(BaseModel):
-    query_triples: list[list[str | float | None]]
-    spatial_constraint: str | None
-    speaker_strict: list[str] | None
-
-class AllocateSearchOutput(BaseModel):
     k_behavior: int
     k_conversation: int
-    speaker_strict: list[str] | None
-    reasoning: str
+
 
 class AnswerWithSearchResultsOutput(BaseModel):
     answer: bool

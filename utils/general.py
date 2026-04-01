@@ -61,59 +61,6 @@ def cosine_similarity(vec1, vec2):
     return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
 
-def merge_character_appearances(characters_appearance, appearance_dict, similarity_threshold=0.85):
-    """
-    Merge/update character appearances into appearance_dict.
-
-    Args:
-        characters_appearance: Iterable of objects with .name and .appearance fields
-        appearance_dict: Dict mapping character name -> [appearance_text, embedding]
-        similarity_threshold: Threshold for matching unknown placeholders
-    """
-    equivalence_list = []
-    for character in characters_appearance:
-        # old character
-        if character.name in appearance_dict:
-            if appearance_dict[character.name][0] != character.appearance:
-                appearance_dict[character.name][0] = character.appearance
-                appearance_dict[character.name][1] = get_embedding(character.appearance)
-            continue
-
-        embedding = get_embedding(character.appearance)
-        best_similarity = 0.0
-        best_match = None
-        # new character
-        for char_name, char_appearance in appearance_dict.items():
-            if char_name.startswith("<character_"):
-                similarity = cosine_similarity(embedding, char_appearance[1])
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_match = char_name
-
-        if best_similarity > similarity_threshold:
-            # <character_X> → <character_Y>
-            if character.name.startswith("<character_"):
-                # Keep the smaller character_X key in appearance_dict.
-                current_idx = int(character.name[len("<character_"):-1])
-                best_idx = int(best_match[len("<character_"):-1])
-                if current_idx < best_idx:
-                    appearance_dict.pop(best_match, None)
-                    appearance_dict[character.name] = [character.appearance, embedding]
-                    equivalence_list.append([best_match, character.name])
-                else:
-                    appearance_dict[best_match] = [character.appearance, embedding]
-                    equivalence_list.append([character.name, best_match])
-            # named character → <character_X>
-            else:
-                appearance_dict.pop(best_match, None)
-                appearance_dict[character.name] = [character.appearance, embedding]
-                equivalence_list.append([best_match, character.name])
-        else:
-            appearance_dict[character.name] = [character.appearance, embedding]
-
-    return equivalence_list
-
-
 def find_pkl_files(graph_dir="data/graphs"):
     """
     List all video names (without .pkl extension) in the graph directory.
@@ -130,4 +77,30 @@ def find_pkl_files(graph_dir="data/graphs"):
 
     pkl_files = sorted(graph_path.glob("*.pkl"))
     return [f.stem for f in pkl_files]
+
+
+def extract_choice_from_content(content) -> str:
+    """
+    Post-process a final LLM content string for MCQ extraction.
+
+    Rules:
+    1) Keep only text after the last newline.
+    2) Remove all non-letter characters from that line.
+    3) If the last remaining character is one of A/B/C/D, return that character.
+       Otherwise, return the whole processed line.
+    """
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        content = str(content)
+
+    last_line = content.rsplit("\n", 1)[-1]
+    letters_only = "".join(ch for ch in last_line if ch.isalpha())
+    if not letters_only:
+        return ""
+
+    last_char = letters_only[-1].upper()
+    if last_char in {"A", "B", "C", "D"}:
+        return last_char
+    return letters_only
 

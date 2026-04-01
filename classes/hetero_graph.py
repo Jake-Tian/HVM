@@ -289,7 +289,6 @@ class HeteroGraph:
             edge.embedding = embedding
         print(len(embeddings), "edge embeddings inserted")
 
-    
     def node_embedding_insertion(self, object_batch_size=100):
         """
         Generate embeddings in two phases:
@@ -306,8 +305,10 @@ class HeteroGraph:
                     if char_name.startswith("<") and char_name.endswith(">")
                     else char_name
                 )
+                if not (text or "").strip():
+                    continue
                 character_items.append((char_name, char_node))
-                character_texts.append(text)
+                character_texts.append(text.strip())
 
         inserted_characters = 0
         if character_items:
@@ -330,8 +331,10 @@ class HeteroGraph:
         object_texts = []
         for obj_name, obj_node in self.objects.items():
             if obj_node.embedding is None:
+                if obj_name is None or not str(obj_name).strip():
+                    continue
                 object_items.append((obj_name, obj_node))
-                object_texts.append(obj_name)
+                object_texts.append(str(obj_name).strip())
 
         inserted_objects = 0
         if object_items:
@@ -364,6 +367,45 @@ class HeteroGraph:
             f"({inserted_characters} characters, {inserted_objects} objects)"
         )
     
+
+    # --------------------------------------------------------
+    # Graph Summary
+    # --------------------------------------------------------
+    def graph_summary(self) -> str:
+        """
+        Return a compact textual summary of graph statistics.
+        Includes:
+        1) Number of behavior triples
+        2) Number of conversations
+        3) Characters with degree > 50 (name and degree)
+        4) Number of object nodes
+        """
+        num_edges = len(self.edges)
+        num_conversations = len(self.conversations)
+        num_objects = len(self.objects)
+
+        node_degrees = self.get_node_degrees()
+        high_degree_characters = []
+        for char_name in self.characters.keys():
+            degree = node_degrees.get(char_name, 0)
+            if degree > 50:
+                high_degree_characters.append((char_name, degree))
+
+        high_degree_characters.sort(key=lambda x: x[1], reverse=True)
+
+        rtn_str = "Graph Summary:\nThe graph is the combination of behavior (stored as triples) and conversation memory.\nThere are two types of nodes in the graph: characters (with angle brackets) and objects. The edges in the graph are the relationships between the nodes."
+        rtn_str += "\nGraph time range: 11:00-15:00, 17:00-23:00."
+
+        rtn_str += f"\nNumber of behavior triples: {num_edges}"
+        rtn_str += f"\nNumber of conversation messages: {num_conversations}"
+        rtn_str += "\nHigh-degree characters:"
+        if high_degree_characters:
+            for char_name, degree in high_degree_characters:
+                rtn_str += f"\n - {char_name}: {degree}"
+        else:
+            rtn_str += "\n - None"
+        rtn_str += f"\nNumber of object nodes: {num_objects}"
+        return rtn_str
 
     # --------------------------------------------------------
     # Search API
@@ -491,9 +533,17 @@ class HeteroGraph:
         q_source = query_triple[0]
         q_content = query_triple[1]
         q_target = query_triple[2]
-        q_source_weight = query_triple[3] if query_triple[3] is not None else 1.0
-        q_content_weight = query_triple[4] if query_triple[4] is not None else 1.0
-        q_target_weight = query_triple[5] if query_triple[5] is not None else 1.0
+        def _to_float_weight(v, default=1.0):
+            if v is None:
+                return float(default)
+            try:
+                return float(v)
+            except Exception:
+                return float(default)
+
+        q_source_weight = _to_float_weight(query_triple[3], 1.0)
+        q_content_weight = _to_float_weight(query_triple[4], 1.0)
+        q_target_weight = _to_float_weight(query_triple[5], 1.0)
         
         # Extract embeddings
         source_emb = query_embeddings[0]
@@ -562,22 +612,14 @@ class HeteroGraph:
             q_content = q_triple[1] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 1 else None
             q_target = q_triple[2] if isinstance(q_triple, (list, tuple)) and len(q_triple) > 2 else None
             
-            # Compute embeddings (skip "?" to avoid unnecessary API calls)
-            source_emb = None
-            if q_source and q_source != "?" and isinstance(q_source, str):
-                source_for_emb = q_source.strip("<>") if q_source.startswith("<") and q_source.endswith(">") else q_source
-                source_emb = get_embedding(source_for_emb)
-            
-            content_emb = None
-            if q_content and q_content != "?" and isinstance(q_content, str):
-                content_emb = get_embedding(q_content)
-            
-            target_emb = None
-            if q_target and q_target != "?" and isinstance(q_target, str):
-                target_for_emb = q_target.strip("<>") if q_target.startswith("<") and q_target.endswith(">") else q_target
-                target_emb = get_embedding(target_for_emb)
-            
-            query_triple_embeddings.append([source_emb, content_emb, target_emb])
+            # Compute embeddings using the shared helper.
+            query_triple_embeddings.append(
+                [
+                    self._compute_embed(q_source),
+                    self._compute_embed(q_content),
+                    self._compute_embed(q_target),
+                ]
+            )
         
         candidate_edges = []
         for edge_id, edge in self.edges.items():
@@ -632,7 +674,9 @@ class HeteroGraph:
         Search for top-k conversation messages using embedding-based similarity.
         
         Args:
-            query: Query string (natural language question)
+            query: either a natural-language string OR a query triple/list-of-triples.
+                   If a triple is provided, we combine (source, content, target) into one sentence
+                   (same style as `_search_temporal_range`) before embedding.
             k: Number of top messages to return
             speaker_strict: Optional list of speakers to filter by (e.g., ["<Alice>", "<Bob>"])
                           Only return conversations where ALL specified speakers are present
@@ -645,12 +689,42 @@ class HeteroGraph:
                     "score": float
                 }
         """
-        if not query or not isinstance(query, str):
+        if not query:
+            return []
+
+        # Allow query to be a triple: [source, content, target, w_source, w_content, w_target]
+        # or list-of-triples: [[...6], [...6], ...]. We use the first triple to form a sentence.
+        query_text = None
+        if isinstance(query, str):
+            query_text = query
+        elif isinstance(query, (list, tuple)):
+            triple = None
+            if len(query) == 6 and not isinstance(query[0], (list, tuple)):
+                triple = query
+            elif len(query) > 0 and isinstance(query[0], (list, tuple)) and len(query[0]) >= 3:
+                triple = query[0]
+
+            if triple is not None:
+                q_source = triple[0] if len(triple) > 0 else None
+                q_content = triple[1] if len(triple) > 1 else None
+                q_target = triple[2] if len(triple) > 2 else None
+
+                s_source = self._format_node_for_sentence(q_source) or ""
+                s_target = self._format_node_for_sentence(q_target) or ""
+                s_content = (q_content or "").strip() if isinstance(q_content, str) else str(q_content or "").strip()
+
+                query_text = " ".join(
+                    part for part in [s_source, s_content, s_target] if part and part != "?"
+                ).strip()
+                if not query_text:
+                    query_text = s_content if s_content else None
+
+        if not isinstance(query_text, str) or not query_text.strip():
             return []
         
         # Get embedding for query
         try:
-            query_embedding = get_embedding(query)
+            query_embedding = get_embedding(query_text)
         except Exception as e:
             print(f"Warning: Failed to get query embedding: {e}")
             return []
@@ -702,7 +776,7 @@ class HeteroGraph:
                     # Fallback to keyword matching
                     formatted_message = f"{speaker}: {content}"
                     formatted_lower = formatted_message.lower()
-                    query_lower = query.lower()
+                    query_lower = query_text.lower()
                     if query_lower in formatted_lower or any(word in formatted_lower for word in query_lower.split()):
                         text_similarity = 0.5
                     else:
@@ -723,7 +797,7 @@ class HeteroGraph:
         scored_messages.sort(key=lambda x: x["score"], reverse=True)
         return scored_messages[:k]
     
-    
+
     def get_conversation_messages_with_context(self, search_results, context_window=2):
         """
         Given the output of search_conversations(), return messages with context window in temporal order.
@@ -817,9 +891,12 @@ class HeteroGraph:
                         if speaker_name.startswith("<") and speaker_name.endswith(">"):
                             speaker_name = speaker_name[1:-1]
                         
-                        # Format with start_time: [hhmmss] Speaker: content
+                        # Format with start_time: [hh:mm:ss] Speaker: content
                         if start_time is not None:
-                            message_lines.append(f"[{start_time}] {speaker_name}: {content}")
+                            ts = str(start_time).strip()
+                            if len(ts) == 6 and ts.isdigit():
+                                ts = f"{ts[0:2]}:{ts[2:4]}:{ts[4:6]}"
+                            message_lines.append(f"[{ts}] {speaker_name}: {content}")
                         else:
                             message_lines.append(f"{speaker_name}: {content}")
             
@@ -837,3 +914,567 @@ class HeteroGraph:
         
         # Join all conversations with double newline separator
         return "\n\n".join(formatted_conversations)
+    
+
+    def general_search(
+        self,
+        query_triples: list[list[str | float | None]],
+        k_behavior: int,
+        k_conversation: int,
+        speaker_strict: list[str] | None = None,
+    ):
+        """
+        General graph search over:
+        - behavior edges (triple similarity)
+        - conversation messages (query sentence built from source/content/target)
+        
+        Args:
+            query_triples: List of query triples
+            k_behavior: Number of top behavior edges to return
+            k_conversation: Number of top conversation messages to return
+            speaker_strict: optional list of speakers for conversation filtering
+        """
+        behavior_edges = self.search_edges(query_triples, k_behavior) if k_behavior > 0 else []
+        conversation_results = (
+            self.search_conversations(query_triples, k_conversation, speaker_strict=speaker_strict)
+            if k_conversation > 0
+            else []
+        )
+        return {"behavior": behavior_edges, "conversation": self.get_conversation_messages_with_context(conversation_results)}
+
+    def search_object(self, obj: str) -> str:
+        """
+        Search graph memory with an object string.
+
+        Steps:
+        1) Embedding similarity over object nodes, return top-50 most similar object names.
+        2) Hard match (word-to-word, case-insensitive) in conversation summaries/messages.
+           If matched, return the full conversation(s).
+
+        Returns:
+            str: formatted search report
+        """
+        query = "" if obj is None else str(obj).strip()
+        if not query:
+            return "Object search query is empty."
+
+        # ---- Part 1: Top-50 objects ranked by similarity, displayed with degree ----
+        object_lines = []
+        try:
+            query_emb = get_embedding(query)
+            scored_objects = []
+            for obj_name, obj_node in self.objects.items():
+                emb = getattr(obj_node, "embedding", None)
+                if emb is None:
+                    continue
+                try:
+                    sim = float(self._cosine_similarity(query_emb, emb))
+                except Exception:
+                    continue
+                scored_objects.append((sim, obj_name))
+            scored_objects.sort(key=lambda x: x[0], reverse=True)
+            top_objects = scored_objects[:50]
+            node_degrees = self.get_node_degrees()
+            if top_objects:
+                object_lines.append("Top-50 object nodes (ranked by similarity, shown with degree):")
+                for _, obj_name in top_objects:
+                    degree = node_degrees.get(obj_name, 0)
+                    object_lines.append(f"- {obj_name}: degree={degree}")
+            else:
+                object_lines.append("Top-50 object nodes (ranked by similarity, shown with degree):\n- None")
+        except Exception as e:
+            object_lines.append(
+                f"Top-50 object nodes (ranked by similarity, shown with degree):\n- Failed to compute embeddings: {e}"
+            )
+
+        # ---- Part 2: Hard match in conversation summaries/messages ----
+        # Word-boundary hard match, case-insensitive.
+        pattern = re.compile(rf"\b{re.escape(query)}\b", flags=re.IGNORECASE)
+        matched_conv_ids = []
+        for conv_id, conversation in self.conversations.items():
+            summary = conversation.summary if hasattr(conversation, "summary") and conversation.summary else ""
+            matched = bool(pattern.search(summary))
+            if not matched:
+                for msg in getattr(conversation, "messages", []) or []:
+                    if not isinstance(msg, list) or len(msg) < 3:
+                        continue
+                    content = msg[2]
+                    if isinstance(content, str) and pattern.search(content):
+                        matched = True
+                        break
+            if matched:
+                matched_conv_ids.append(conv_id)
+
+        matched_conv_ids.sort()
+        conversation_lines = ["Matched conversations (hard match in summary/messages):"]
+        if not matched_conv_ids:
+            conversation_lines.append("- None")
+        else:
+            for conv_id in matched_conv_ids:
+                conversation = self.conversations.get(conv_id)
+                if conversation is None:
+                    continue
+                summary = conversation.summary if hasattr(conversation, "summary") and conversation.summary else ""
+                if summary:
+                    conversation_lines.append(f"Conversation {conv_id}: {summary}")
+                else:
+                    conversation_lines.append(f"Conversation {conv_id}:")
+
+                for msg in getattr(conversation, "messages", []) or []:
+                    if not isinstance(msg, list) or len(msg) < 3:
+                        continue
+                    start_time = msg[0]
+                    speaker = msg[1]
+                    content = msg[2]
+                    ts = str(start_time).strip() if start_time is not None else ""
+                    if len(ts) == 6 and ts.isdigit():
+                        ts = f"{ts[0:2]}:{ts[2:4]}:{ts[4:6]}"
+                        conversation_lines.append(f"[{ts}] {speaker}: {content}")
+                    else:
+                        conversation_lines.append(f"{speaker}: {content}")
+                conversation_lines.append("")
+
+        header = f"Object search query: {query}"
+        return "\n".join([header, "", *object_lines, "", *conversation_lines]).strip()
+
+
+    def _format_node_for_sentence(self, node_str: str | None) -> str | None:
+        """
+        Normalize a node label for use inside a natural-language sentence.
+        - Character nodes are stored as "<Alice>" etc; strip angle brackets.
+        - Objects are stored as plain strings; keep as-is.
+        """
+        if node_str is None:
+            return None
+        s = str(node_str).strip()
+        if not s:
+            return None
+        if s.startswith("<") and s.endswith(">"):
+            return s[1:-1].strip()
+        return s
+
+    def _parse_hhmmss_int(self, hhmmss: str) -> int:
+        ts = str(hhmmss).strip()
+        if len(ts) != 6 or not ts.isdigit():
+            raise ValueError(f"Expected hhmmss timestamp as 6 digits, got: {hhmmss!r}")
+        return int(ts)
+
+    def _compute_embed(self, node):
+        """
+        Compute an embedding for a node-like string used in triple matching.
+        Returns None for None / "?" / empty strings.
+
+        - Character nodes are stored as "<Alice>" -> embed "Alice" (strip angle brackets).
+        - Object nodes are plain strings -> embed as-is (trim whitespace).
+        """
+        if node is None:
+            return None
+        if not isinstance(node, str):
+            node = str(node)
+        node = node.strip()
+        if not node or node == "?":
+            return None
+        if node.startswith("<") and node.endswith(">"):
+            node = node[1:-1].strip()
+        if not node:
+            return None
+        return get_embedding(node)
+
+    def search_within_time_range(
+        self,
+        begin_time: str | None,
+        end_time: str | None,
+        triples: list,
+        k_behavior: int,
+        k_conversation: int,
+    ):
+        """
+        Search for evidence between begin/end bounds (inclusive).
+        Either boundary may be None (one-sided search).
+
+        Args:
+            begin_time: hhmmss string (6 digits) or None
+            end_time: hhmmss string (6 digits) or None
+            triples: [source, content, target, weight_source, weight_content, weight_target]
+            k_behavior: number of top behavior edges to return
+            k_conversation: number of top conversation messages to return
+
+        Returns:
+            dict with:
+              - "behavior": list[Edge]
+              - "conversation": formatted conversation context string
+        """
+        return self._search_temporal_range(
+            begin_time=begin_time,
+            end_time=end_time,
+            triples=triples,
+            k_behavior=k_behavior,
+            k_conversation=k_conversation,
+        )
+
+    # Backwards-compatible wrappers (implemented via search_within_time_range).
+    def search_before(self, timestamp: str, triples: list, k_behavior: int, k_conversation: int):
+        return self.search_within_time_range(
+            begin_time=None,
+            end_time=timestamp,
+            triples=triples,
+            k_behavior=k_behavior,
+            k_conversation=k_conversation,
+        )
+
+    def search_after(self, timestamp: str, triples: list, k_behavior: int, k_conversation: int):
+        return self.search_within_time_range(
+            begin_time=timestamp,
+            end_time=None,
+            triples=triples,
+            k_behavior=k_behavior,
+            k_conversation=k_conversation,
+        )
+
+    def _search_temporal_range(
+        self,
+        *,
+        begin_time: str | None,
+        end_time: str | None,
+        triples: list,
+        k_behavior: int,
+        k_conversation: int,
+    ):
+        anchor_begin = self._parse_hhmmss_int(begin_time) if begin_time is not None else None
+        anchor_end = self._parse_hhmmss_int(end_time) if end_time is not None else None
+
+        # ---- Parse query triple + weights ----
+        if not isinstance(triples, (list, tuple)) or len(triples) != 6:
+            raise ValueError(
+                "triples must be a list of 6 elements: "
+                "[source, content, target, weight_source, weight_content, weight_target]"
+            )
+        q_source, q_content, q_target, w_source, w_content, w_target = triples
+        w_source = float(w_source) if w_source is not None else 1.0
+        w_content = float(w_content) if w_content is not None else 1.0
+        w_target = float(w_target) if w_target is not None else 1.0
+
+        # ---- Behavior (edge) search ----
+        behavior_out: list[Edge] = []
+        if k_behavior and k_behavior > 0:
+            # Pre-compute query embeddings; skip wildcards ("?") to save API calls.
+            q_source_emb = self._compute_embed(q_source)
+            q_content_emb = self._compute_embed(q_content)
+            q_target_emb = self._compute_embed(q_target)
+
+            query_triple_with_weights = [q_source, q_content, q_target, w_source, w_content, w_target]
+            query_embeddings = [q_source_emb, q_content_emb, q_target_emb]
+
+            scored_edges: list[tuple[float, Edge]] = []
+            for edge in self.edges.values():
+                if edge is None or not isinstance(edge.timestamp, str):
+                    continue
+                try:
+                    t = int(edge.timestamp)
+                except Exception:
+                    continue
+                if anchor_begin is not None and not (t >= anchor_begin):
+                    continue
+                if anchor_end is not None and not (t <= anchor_end):
+                    continue
+
+                score = self._compute_edge_similarity(
+                    edge,
+                    query_triple=query_triple_with_weights,
+                    query_embeddings=query_embeddings,
+                )
+                if score > 0:
+                    scored_edges.append((score, edge))
+
+            scored_edges.sort(key=lambda x: x[0], reverse=True)
+            behavior_out = [e for _, e in scored_edges[:k_behavior]]
+
+        # ---- Conversation message search ----
+        conversation_out: list[dict] = []
+        if k_conversation and k_conversation > 0:
+            s_source = self._format_node_for_sentence(q_source) or ""
+            s_target = self._format_node_for_sentence(q_target) or ""
+            s_content = (q_content or "").strip() if isinstance(q_content, str) else str(q_content or "").strip()
+
+            # Build a single query sentence; keep it simple and consistent.
+            # Example: "Alice hits Tasha"
+            query_sentence = " ".join(part for part in [s_source, s_content, s_target] if part and part != "?")
+            if not query_sentence:
+                query_sentence = s_content if s_content else "?"
+
+            query_embedding = get_embedding(query_sentence)
+
+            scored_msgs: list[dict] = []
+            for conv_id, conversation in self.conversations.items():
+                for msg_idx, message in enumerate(getattr(conversation, "messages", []) or []):
+                    if not isinstance(message, list) or len(message) < 3:
+                        continue
+                    msg_time = message[0]
+                    if msg_time is None:
+                        continue
+                    try:
+                        msg_t = int(str(msg_time).strip())
+                    except Exception:
+                        continue
+                    if anchor_begin is not None and not (msg_t >= anchor_begin):
+                        continue
+                    if anchor_end is not None and not (msg_t <= anchor_end):
+                        continue
+
+                    speaker = message[1]
+                    content = message[2]
+                    emb = message[3] if len(message) >= 4 else None
+                    if emb is None:
+                        # Fallback embedding; align with how build_memory computed it: "Speaker: content"
+                        speaker_name = self._format_node_for_sentence(speaker) or ""
+                        emb = get_embedding(f"{speaker_name}: {content}")
+
+                    sim = float(self._cosine_similarity(query_embedding, emb))
+                    # Lightweight weight usage: emphasize content weight if provided.
+                    sim *= (w_content if w_content is not None else 1.0)
+                    if sim > 0:
+                        scored_msgs.append(
+                            {
+                                "conversation_id": conv_id,
+                                "message_index": msg_idx,
+                                "score": sim,
+                            }
+                        )
+
+            scored_msgs.sort(key=lambda x: x["score"], reverse=True)
+            conversation_out = scored_msgs[:k_conversation]
+
+        return {
+            "behavior": behavior_out,
+            "conversation": self.get_conversation_messages_with_context(conversation_out),
+        }
+
+    def _normalize_query_triples(self, triples: list):
+        """
+        Accept either:
+        - a single triple: [source, content, target, w_source, w_content, w_target]
+        - a list of triples: [[...6], [...6], ...]
+        """
+        if not isinstance(triples, (list, tuple)):
+            raise ValueError("triples must be a list")
+        if len(triples) == 6 and (not isinstance(triples[0], (list, tuple))):
+            return [triples]
+        # list-of-triples
+        if len(triples) > 0 and isinstance(triples[0], (list, tuple)) and len(triples[0]) == 6:
+            return list(triples)
+        raise ValueError(
+            "triples must be either a single 6-element triple or a list of 6-element triples"
+        )
+
+    def search_first(self, triples: list, k_behavior: int, k_conversation: int):
+        """
+        Scan from the beginning (earliest timestamps) and return items whose
+        matching score is >= confidence_level, until k is reached.
+
+        Returns: {"behavior": list[Edge], "conversation": formatted context string}
+        """
+        confidence_level = 0.5
+        query_triples = self._normalize_query_triples(triples)
+
+        # Pre-compute behavior query embeddings and weighted triples.
+        behavior_query = []
+        for q in query_triples:
+            q_source, q_content, q_target, w_source, w_content, w_target = q
+            behavior_query.append(
+                (
+                    [q_source, q_content, q_target, float(w_source or 1.0), float(w_content or 1.0), float(w_target or 1.0)],
+                    [self._compute_embed(q_source), self._compute_embed(q_content), self._compute_embed(q_target)],
+                )
+            )
+
+        behavior_out: list[Edge] = []
+        if k_behavior and k_behavior > 0:
+            edges_sorted = []
+            for edge in self.edges.values():
+                if edge is None or not isinstance(edge.timestamp, str):
+                    continue
+                try:
+                    t = int(edge.timestamp)
+                except Exception:
+                    continue
+                edges_sorted.append((t, edge))
+            edges_sorted.sort(key=lambda x: x[0])  # earliest first
+
+            for _, edge in edges_sorted:
+                best_score = 0.0
+                for q_with_weights, q_embeddings in behavior_query:
+                    score = self._compute_edge_similarity(
+                        edge,
+                        query_triple=q_with_weights,
+                        query_embeddings=q_embeddings,
+                    )
+                    if score > best_score:
+                        best_score = score
+                if best_score >= confidence_level:
+                    behavior_out.append(edge)
+                    if len(behavior_out) >= k_behavior:
+                        break
+
+        # Pre-compute conversation query embeddings.
+        conversation_query = []
+        for q in query_triples:
+            q_source, q_content, q_target, w_source, w_content, w_target = q
+            s_source = self._format_node_for_sentence(q_source) or ""
+            s_target = self._format_node_for_sentence(q_target) or ""
+            s_content = (q_content or "").strip() if isinstance(q_content, str) else str(q_content or "").strip()
+            query_sentence = " ".join(part for part in [s_source, s_content, s_target] if part and part != "?")
+            if not query_sentence:
+                query_sentence = s_content if s_content else "?"
+            conversation_query.append((get_embedding(query_sentence), float(w_content or 1.0)))
+
+        conversation_out: list[dict] = []
+        if k_conversation and k_conversation > 0:
+            messages_sorted = []
+            for conv_id, conversation in self.conversations.items():
+                for msg_idx, message in enumerate(getattr(conversation, "messages", []) or []):
+                    if not isinstance(message, list) or len(message) < 3:
+                        continue
+                    msg_time = message[0]
+                    if msg_time is None:
+                        continue
+                    try:
+                        msg_t = int(str(msg_time).strip())
+                    except Exception:
+                        continue
+                    messages_sorted.append((msg_t, conv_id, msg_idx, message))
+            messages_sorted.sort(key=lambda x: x[0])  # earliest first
+
+            for _, conv_id, msg_idx, message in messages_sorted:
+                emb = message[3] if len(message) >= 4 else None
+                if emb is None:
+                    speaker_name = self._format_node_for_sentence(message[1]) or ""
+                    emb = get_embedding(f"{speaker_name}: {message[2]}")
+
+                best_sim = 0.0
+                for q_emb, w_content in conversation_query:
+                    sim = float(self._cosine_similarity(q_emb, emb)) * (w_content if w_content is not None else 1.0)
+                    if sim > best_sim:
+                        best_sim = sim
+                if best_sim >= confidence_level:
+                    conversation_out.append(
+                        {
+                            "conversation_id": conv_id,
+                            "message_index": msg_idx,
+                            "score": best_sim,
+                        }
+                    )
+                    if len(conversation_out) >= k_conversation:
+                        break
+
+        return {
+            "behavior": behavior_out,
+            "conversation": self.get_conversation_messages_with_context(conversation_out),
+        }
+
+    def search_last(self, triples: list, k_behavior: int, k_conversation: int):
+        """
+        Scan from the end (latest timestamps) and return items whose
+        matching score is >= confidence_level, until k is reached.
+
+        Returns: {"behavior": list[Edge], "conversation": formatted context string}
+        """
+        confidence_level = 0.5
+        query_triples = self._normalize_query_triples(triples)
+
+        # Pre-compute behavior query embeddings and weighted triples.
+        behavior_query = []
+        for q in query_triples:
+            q_source, q_content, q_target, w_source, w_content, w_target = q
+            behavior_query.append(
+                (
+                    [q_source, q_content, q_target, float(w_source or 1.0), float(w_content or 1.0), float(w_target or 1.0)],
+                    [self._compute_embed(q_source), self._compute_embed(q_content), self._compute_embed(q_target)],
+                )
+            )
+
+        behavior_out: list[Edge] = []
+        if k_behavior and k_behavior > 0:
+            edges_sorted = []
+            for edge in self.edges.values():
+                if edge is None or not isinstance(edge.timestamp, str):
+                    continue
+                try:
+                    t = int(edge.timestamp)
+                except Exception:
+                    continue
+                edges_sorted.append((t, edge))
+            edges_sorted.sort(key=lambda x: x[0], reverse=True)  # latest first
+
+            for _, edge in edges_sorted:
+                best_score = 0.0
+                for q_with_weights, q_embeddings in behavior_query:
+                    score = self._compute_edge_similarity(
+                        edge,
+                        query_triple=q_with_weights,
+                        query_embeddings=q_embeddings,
+                    )
+                    if score > best_score:
+                        best_score = score
+                if best_score >= confidence_level:
+                    behavior_out.append(edge)
+                    if len(behavior_out) >= k_behavior:
+                        break
+
+        # Pre-compute conversation query embeddings.
+        conversation_query = []
+        for q in query_triples:
+            q_source, q_content, q_target, w_source, w_content, w_target = q
+            s_source = self._format_node_for_sentence(q_source) or ""
+            s_target = self._format_node_for_sentence(q_target) or ""
+            s_content = (q_content or "").strip() if isinstance(q_content, str) else str(q_content or "").strip()
+            query_sentence = " ".join(part for part in [s_source, s_content, s_target] if part and part != "?")
+            if not query_sentence:
+                query_sentence = s_content if s_content else "?"
+            conversation_query.append((get_embedding(query_sentence), float(w_content or 1.0)))
+
+        conversation_out: list[dict] = []
+        if k_conversation and k_conversation > 0:
+            messages_sorted = []
+            for conv_id, conversation in self.conversations.items():
+                for msg_idx, message in enumerate(getattr(conversation, "messages", []) or []):
+                    if not isinstance(message, list) or len(message) < 3:
+                        continue
+                    msg_time = message[0]
+                    if msg_time is None:
+                        continue
+                    try:
+                        msg_t = int(str(msg_time).strip())
+                    except Exception:
+                        continue
+                    messages_sorted.append((msg_t, conv_id, msg_idx, message))
+            messages_sorted.sort(key=lambda x: x[0], reverse=True)  # latest first
+
+            for _, conv_id, msg_idx, message in messages_sorted:
+                emb = message[3] if len(message) >= 4 else None
+                if emb is None:
+                    speaker_name = self._format_node_for_sentence(message[1]) or ""
+                    emb = get_embedding(f"{speaker_name}: {message[2]}")
+
+                best_sim = 0.0
+                for q_emb, w_content in conversation_query:
+                    sim = float(self._cosine_similarity(q_emb, emb)) * (w_content if w_content is not None else 1.0)
+                    if sim > best_sim:
+                        best_sim = sim
+                if best_sim >= confidence_level:
+                    conversation_out.append(
+                        {
+                            "conversation_id": conv_id,
+                            "message_index": msg_idx,
+                            "score": best_sim,
+                        }
+                    )
+                    if len(conversation_out) >= k_conversation:
+                        break
+
+        return {
+            "behavior": behavior_out,
+            "conversation": self.get_conversation_messages_with_context(conversation_out),
+        }
+
+    
+    

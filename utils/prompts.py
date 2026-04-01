@@ -250,7 +250,6 @@ Characters in this video are only: <I>, <Alice>, <Tasha>, <Lucia>, <Katrina>, an
 - **Character/Object format rule (STRICT)**:
   - Characters: must keep angle brackets, e.g. `<I>`, `<Alice>`, `<Tasha>`, `<Lucia>`, `<Katrina>`, `<Shure>`.
   - Objects: must **NOT** use angle brackets.
-  - If an object appears with angle brackets in input, remove them in output.
 - Copy entity names **verbatim** (except removing angle brackets from objects)
 - Use `null` if no target exists
 - Do **not** invent entities
@@ -275,11 +274,9 @@ Examples:
 - "<Alice> hits <Tasha>'s head" → ["<Alice>", "hits head", "<Tasha>"]
 - "<Lucia> touches <Shure>'s shoulder" → ["<Lucia>", "touches shoulder", "<Shure>"]
 
-5. OBJECT HANDLING
+4. OBJECT HANDLING
 - Objects are nouns
 - NEVER wrap object nodes with angle brackets (`< >`)
-- Singularize plurals  
-  books → book
 - Keep adjectives attached to the object  
   eg. "red cup"
 - Keep named objects verbatim  
@@ -287,24 +284,21 @@ Examples:
 - Split compound objects into separate triples
   eg. "<Alice> picks up the book and the pen" → ["<Alice>", "picks up", "book"], ["<Alice>", "picks up", "pen"]
 
-6. PRONOUN & POSSESSIVE RESOLUTION
+5. PRONOUN & POSSESSIVE RESOLUTION
 - NEVER use pronouns (his, her, their)
 - Replace possessives with explicit ownership:
   - his wallet → <Shure>'s wallet
 - Default ownership to the **nearest subject** if ambiguous
 
+6. MULTIPLE RELATIONS
+- Multiple subjects: Each subject gets its own triple
+  eg. "<Alice> and <Bob> exit" → ["<Alice>", "exit", null], ["<Bob>", "exit", null]
+- Multiple verbs: Each verb becomes a separate triple
+  eg. "<Lisa> dances and sings" → ["<Lisa>", "dances", null], ["<Lisa>", "sings", null]
+- Multiple objects: Each object becomes a separate triple
 
-## Extraction rules
-1. Preserve chronology.
-2. Prefer concrete entities from the text:
-   - Characters should keep angle brackets if present (e.g., <Tasha>, <Lucia>).
-   - If no explicit character is named and the sentence uses first person ("I"), use "<I>" as source.
-3. Normalize actions to concise verb phrases in simple present tense.
-4. Keep important spatial/temporal modifiers in content when needed
-   (e.g., "puts on", "moves to the left", "is in front of").
-5. Split compound events into multiple triples when necessary.
-6. Remove obvious duplication and low-information filler.
-7. Do not invent entities not supported by the text.
+7. INFORMATION CONSISTENCY
+- Ensure there is no information loss when converting the sentence into triples. Do NOT remove any adjectives, adverbs, or other modifiers.
 
 ## Good examples
 Input segment:
@@ -323,7 +317,7 @@ Input segment:
 Output triples:
  - TimeTriple(time="111012", triple=["<Tasha>", "waves at", "<Lucia>"])
 
-Now convert the following input segments (JSON array of `[timestamp, text]` lists):
+Now convert the following input segments:
 """
 
 
@@ -1391,7 +1385,7 @@ Now process the following input:
 
 
 prompt_answer_with_search_results_final = """
-You are the final-round reasoner for a multiple-choice QA task.
+This is the final round of the QA task.
 
 You will receive:
 1) the question
@@ -1399,21 +1393,59 @@ You will receive:
 3) accumulated retrieved evidence from all previous search rounds
 
 You must choose one option based on the accumulated retrieved evidence.
-If you are not sure, choose the option that is most supported by the evidence.
+If you are not sure, choose the option that is most supported by the evidence. The answer like "I don't know", "insufficient information", "cannot determine" are NOT allowed.
+The output must be exactly one letter.
+"""
 
-## Output format (STRICT JSON)
-Return ONLY one JSON object:
-{
-  "content": "<A|B|C|D>",
-  "summary": "<1-3 sentence evidence summary for why this option is best>"
-}
 
-Rules:
-- `content` must be exactly one of: `"A"`, `"B"`, `"C"`, `"D"`.
-- `summary` should cite the strongest evidence from retrieved results.
-- No markdown, no extra text.
+prompt_agent = """
+You will receive:
+1) a user question
+2) multiple-choice options (A/B/C/D)
+3) The searched behavior and conversation results from previous rounds
 
-Now process the following input:
+Your task is to decide whether the retrieved results are sufficient to answer the question.
+
+## Decision: 
+1. If sufficient:
+   - return a single letter (A/B/C/D) that indicates the best option.
+2. If insufficient:
+   - choose the most suitable search tool for the next round.
+   - explicitly identify the missing knowledge and update the next query triple to target that gap.
+
+Tool usage guidance: 
+- `general_search`: default semantic retrieval. Use when you just need the most relevant evidence without extra temporal constraints.
+- `search_before`: temporal-backward retrieval. Use when the question asks what happened before a known event/line.
+- `search_after`: temporal-forward retrieval. Use when the question asks what happened after a known event/line.
+- `search_first`: earliest-occurrence retrieval. Use when the question asks who/what happened first or earliest.
+- `search_last`: latest-occurrence retrieval. Use when the question asks who/what happened last or most recently.
+- `search_object`: object-centric retrieval. Use when the question asks about a specific object. It could be used in early rounds for a broad search. Do not use it in the final round. 
+
+Round constraints:
+- **Round 1 is mandatory**: you must choose `general_search`.
+- In Round 1, k_behavior + k_conversation must be 50. 
+- From Round 2 onward, if previous results are insufficient, you must update the query triple(s) based on the missing knowledge.
+- Do not repeat the exact same triple(s) when previous results were insufficient unless you also change strategy/tool and clearly justify it by a different missing gap.
+- `search_object` can be used as intermediate search. If the object in the question does not exist in the graph, you need to use synonyms that exist in the graph for the follow-up search.
+- If the question asks what happened before/after a known event, you first need to find the event in the graph, then use `search_before` or `search_after` using the timestamp of the event.
+
+The search methods take following input: 
+1. **Query triple**: 
+  - Triple format: [source, content, target, source_weight, content_weight, target_weight]
+  - Use "?" for missing or unknown components, normalize to graph format. 
+  - Use angle brackets for characters (eg. <Tasha>, <Lucia>, <I>)
+  - Weight assigning rules: 
+     - **High (0.7-1.0)**: Specific character/object names (e.g., "<Alice>", "coffee", "the red cup") - use 0.9-1.0 for critical entities
+     - **Medium (0.4-0.7)**: General objects/locations (e.g., "cup", "room") - use 0.5-0.7 for context
+     - **Low (0.1-0.4)**: What we're searching for - question marks ("?"), unknown actions, vague terms
+  - If searching based on the triple from the question is not helpful, you can also generate triples based on choices.
+  - When insufficient, revise at least one of (source/content/target) to directly probe the missing fact (entity, relation, time anchor, or location cue).
+
+2. **Search budget**:
+  - k_behavior and k_conversation are the search budgets for behavior and conversation respectively.
+  - You should decide how many bahavior triples and conversation messages to be searched based on the question and the previous results.
+  - 1 <= k_behavior + k_conversation <= 50. 
+  - You can choose only search for behavior and conversation. In this case, the other one should be 0.
 """
 
 
