@@ -660,49 +660,6 @@ Now parse the following query:
 """
 
 
-prompt_graph_episodic = """
-You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
-
-The system processes video information in three layers:
-1. **Video**: Videos are split into 30-second segments, each assigned a unique clip_id (1, 2, 3, ...)
-2. **Text**: Each segment's text descriptions (behaviors, conversations, scenes) are stored by clip_id
-3. **Graph**: Text is converted into graph edges with two types:
-   - **High-level** : Abstract attributes/relationships
-   - **Low-level** : Specific actions/states with temporal and spatial information
-   Each edge's clip_id links back to its original video segment. 
-All the current information provided is from the graph.
-
-Input format: 
-1. **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
-  Example: Anna is: health-conscious (80) means 80% confidence.
-2. **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
-  Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
-
-Decision criteria: 
-1. Answer directly ([Answer]) when the current information provides a clear, complete answer.
-2. Search text memory ([Search]) when the current information is incomplete or ambiguous.
-
-Output the answer in the format: 
-Action: [Answer] or [Search]
-Content: <your answer here> or <updated query>
-
-If the action is [Search], provide an updated query that would help retrieve the missing information. The query should be more specific or focus on the aspects that are unclear or missing from the current search results. Use natural language and be precise about what information you need.
-
-Examples:
-
-Question: Who is the best friend of Alice?
-Output:
-Action: [Answer]
-Content: Bob is Alice's best friend.
-
-Question: Why did Alice leave the room?
-Output:
-Action: [Search]
-Content: What happened before Alice left the room that caused her to leave?
-"""
-
-
 prompt_graph_video = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
@@ -833,121 +790,6 @@ Answers like "I don't know" or "The information is not sufficient to answer the 
 """
 
 
-# Ablation: no high-level - graph search excludes character attributes/relationships
-prompt_graph_video_no_highlevel = """
-You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
-
-You will be provided with extracted knowledge from the video graph, including characters' behaviors and conversations.
-
-Input format:
-- **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
-  Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
-
-Output should include: 
-1. answer: True or False
-2. content: <your answer here> or [clip_id1, clip_id2, ...]
-3. summary: <only present when answer is False - summary of extracted information from the graph>
-
-**Decision criteria**: 
-1. Answer directly when the current graph information provides a clear answer to the question. You should make reasonable deductions and inferences from the available information when appropriate. If the information is sufficient to answer the question (even if not explicitly stated verbatim), choose Answer.
-  Output should be: 
-  - answer: True
-  - content: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
-  - summary: None
-
-2. Search video memory when the extracted information is insufficient or ambiguous and cannot support a reasonable answer through deduction.
-  Output should be:
-  - answer: False
-  - content: Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...]
-  - summary: Provide a concise summary of extracted graph information relevant to the question, including key events, character information, conversations, and temporal/spatial context.
-
-Special types of questions:
-1. Spatial/Location questions (questions asking "where" or "which place"):
-  - answer is True only if the location information includes specific furniture, containers, or precise spatial relationships. Generic room names alone are INSUFFICIENT.
-  - If the location information is generic (e.g., "kitchen", "office", "living room"), answer is False.
-  - If answer is False:
-    - Provide a list of video clip IDs (as integers) ranked by relevance: [clip_id1, clip_id2, ...].
-    - Include the clips where the actions occured, and the clips before and after the actions if neccessary.
-    - Focus the summary on object locations, character actions involving the object, spatial relationships and temporal sequences.
-
-2. Temporal Sequence questions (questions asking about event order, sequence, "first", "before", "after", "should X be done first", "what happened before/after X", etc.):
-  - answer is True only if the graph clearly shows the temporal sequence with sufficient detail (e.g., clip IDs show clear sequence).
-  - If the temporal sequence is unclear, ambiguous, or missing key events, answer is False.
-  - **Distinguish**: "Should X be done first?" asks about INSTRUCTIONS/intended order, while "What happened before/after X?" asks about ACTUAL sequence.
-  - If answer is False:
-    - **Clip selection priority**: Focus on clips BEFORE or AFTER the key action/event based on the temporal context of the question. If information is insufficient, prioritize clips that occur BEFORE the key action.
-    - **Summary format**: MUST clearly indicate temporal information with explicit clip IDs. Format: "In clip [X], [character/event] [action]." Use this format for each relevant event in chronological order.
-    - Focus the summary on events in chronological order with explicit clip IDs, character actions and their sequence, and what happened before/after the key action.
-
-3. Counting questions (questions asking "how many", "how many times", "how many pieces", "how many kinds", etc.):
-  - answer is True only if the graph provides explicit counts or if all occurrences can be clearly enumerated from the graph information.
-  - If counts are vague, incomplete, or if multiple occurrences might be missed, then answer is False.
-  - If answer is False:
-    - **Clip selection**: Include ALL clips where the mentioned event takes place. Also include clip IDs between two mentioned events if necessary to ensure no counting is missed during the information storage step.
-    - **Summary format**: MUST clearly indicate counts per clip with explicit clip IDs. Format: "In clip [X], [character/event] [action] [count]." Example: "In clip 18, A did something once; in clip 20, A did something twice."
-    - Focus the summary on enumerating each occurrence with its clip ID and count, ensuring all events are accounted for.
-
-Examples:
-
-Question: What did Anna decide to drink before the game?
-Extracted information: High-level: (not available) Low-level: [15] Anna picks up Anna's water bottle. [16] Susan picks up Susan's sports drink. Conversations: Anna says "I just want a bottle of water. That's fine. No sports soda for me." Susan responds "you never drink sports soda, and just mineral water."
-Output:
-GraphVideoOutput(
-  answer=True,
-  content="Anna decided to drink water before the game.",
-  summary=None
-)
-
-Question: What happened after Alice received the gift?
-Extracted information: High-level: (not available) Low-level: [15] Bob gives Alice wrapped gift box. [16] Alice unwraps gift box. [17] Alice reads book. Conversations: (no relevant conversations)
-Output:
-GraphVideoOutput(
-  answer=True,
-  content="After receiving the gift, Alice unwrapped it and then read the book.",
-  summary=None
-)
-
-Question: What is the relationship between Anna and Susan?
-Extracted information: High-level: (not available) Low-level: [12] Anna challenges Susan to a game. [15] Anna and Susan prepare for competition. Conversations: Anna and Susan discuss their upcoming game, with Anna expressing confidence in winning.
-Output:
-GraphVideoOutput(
-  answer=False,
-  content=[12, 15, 14, 16],
-  summary="The graph shows low-level actions but does not contain character relationships (high-level excluded). The relationship between Anna and Susan cannot be inferred from actions and conversations alone. Clips 12 and 15 show competitive preparation; additional clips may reveal their relationship dynamics."
-)
-
-Question: Where is the book Lucky read just now?
-Extracted information: High-level: (not available) Low-level: [8] Lucky reads book. (bedroom) [9] Lucky places book. (bedroom) Conversations: (no relevant conversations)
-Output:
-GraphVideoOutput(
-  answer=False,
-  content=[8, 9, 7],
-  summary="The graph shows Lucky reading a book at clip 8 and placing it at clip 9, both in the bedroom. However, the specific location within the bedroom (e.g., which furniture or surface) is not captured in the graph. In clip 8, Lucky reads the book. In clip 9, Lucky places the book. The exact placement location (e.g., bedside table, desk, shelf) requires visual inspection of the video frames."
-)
-
-Question: Should the balloons be put up first?
-Extracted information: High-level: (not available) Low-level: [10] Betty instructs to put up balloons. (living room) [12] Betty and Linda write message on balloons. (living room) [14] Betty and Linda put up balloons. (living room) Conversations: (no relevant conversations)
-Output:
-GraphVideoOutput(
-  answer=False,
-  content=[10, 12, 14, 11, 13],
-  summary="The graph shows multiple events but the temporal sequence is unclear. In clip 10, Betty instructs to put up balloons. In clip 12, Betty and Linda write message on balloons. In clip 14, Betty and Linda put up balloons. However, the graph does not clearly indicate whether the instruction in clip 10 specifies the order, or what happens before putting up the balloons. The sequence requires visual verification to determine the intended order."
-)
-
-Question: How many times was the air-conditioning remote used?
-Extracted information: High-level: (not available) Low-level: [8] <character_1> uses air-conditioning remote. (meeting room) [11] <character_1> uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
-Output:
-GraphVideoOutput(
-  answer=False,
-  content=[8, 11, 9, 10],
-  summary="The graph shows the air-conditioning remote being used at clip 8 and clip 11. However, to ensure accurate counting and verify no uses were missed between these clips, all clips from 8 to 11 should be checked. In clip 8, the remote was used once; in clip 11, the remote was used once. Clips 9-10 are included to ensure no counting is missed during the information storage step."
-)
-
-Now evaluate the following:
-"""
-
-
 prompt_video_answer = """
 You are given a 30-second video clip represented as sequential frames (pictures in chronological order) and a question.
 
@@ -1052,25 +894,6 @@ VideoOutputFormat(
 """
 
 
-prompt_semantic_answer_only = """
-You are a reasoning system that answers questions based on information extracted.
-
-You will be provided with extracted text knowledge from a video, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
-
-Input format: 
-- **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
-  Example: Anna is: health-conscious (80) means 80% confidence.
-- **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
-  Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
-
-Your task: Answer the question directly based on the provided information. You MUST provide an answer - never say that information is missing, unavailable, or not specified. 
-
-Output format: 
-Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question. Always provide a concrete answer, never state that information is missing.
-"""
-
-
 prompt_video_answer_final = """
 You are given a 30-second video represented as sequential frames (pictures in chronological order) and a question. 
 
@@ -1136,3 +959,43 @@ Input:
 	•	agent_answer: {agent_answer}
 
 Output ('Yes' or 'No'):"""
+
+prompt_agent = """
+You will receive:
+1) a user question
+2) multiple-choice options (A/B/C/D)
+3) The searched behavior and conversation results from previous rounds
+
+Your task is to decide whether the retrieved results are sufficient to answer the question.
+
+## Decision:
+1. If sufficient:
+   - return a single letter (A/B/C/D) that indicates the best option.
+2. If insufficient:
+   - Choose the most suitable search tool for the next round.
+   - explicitly identify the missing knowledge and update the next query to target that gap.
+   - write a concise summary of the current search results relevant to the question.
+
+## Tool usage guidance:
+- `general_search`: default semantic retrieval. Use when you need relevant evidence from graph. You can specify different k values for low_level, high_level, conversations, and appearance.
+  - IMPORTANT: If the question asks about "the main character" or "the person recording", you MUST use the actual name of the Main Character provided in the Graph Summary for your `query_triples`. For example, instead of `["the main character", "do", "?"]`, use `["<Actual_Name>", "do", "?"]`.
+- `get_clip_context`: Use this when you found a relevant clip_id from `general_search` but need the full conversation and summary of that specific clip.
+- `video_rewatch`: ONLY use this when the text result is insufficient, because the cost is high. Provide the clip_id.
+
+## Constraints:
+- Do not repeat the exact same search when previous results were insufficient.
+- Be concise.
+"""
+
+prompt_answer_with_search_results_final = """
+This is the final round of the QA task.
+
+You will receive:
+1) the question
+2) options A/B/C/D
+3) accumulated retrieved evidence from all previous search rounds
+
+You must choose one option based on the accumulated retrieved evidence.
+If you are not sure, choose the option that is most supported by the evidence. Answers like "I don't know" are NOT allowed.
+The output must be exactly one letter.
+"""

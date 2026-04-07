@@ -14,60 +14,33 @@ model = init_chat_model("gpt-4o-mini")
 MAX_SEARCH_ROUNDS = 5
 MAX_RETRIES_PER_ROUND = 1
 
+from utils.prompts import prompt_agent, prompt_answer_with_search_results_final
+
 class MessagesState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
     llm_calls: int
     retry_count: int
-
-prompt_agent = """
-You will receive:
-1) a user question
-2) multiple-choice options (A/B/C/D)
-3) The searched behavior and conversation results from previous rounds
-
-Your task is to decide whether the retrieved results are sufficient to answer the question.
-
-## Decision:
-1. If sufficient:
-   - return a single letter (A/B/C/D) that indicates the best option.
-2. If insufficient:
-   - Choose the most suitable search tool for the next round.
-   - explicitly identify the missing knowledge and update the next query to target that gap.
-   - write a concise summary of the current search results relevant to the question.
-
-## Tool usage guidance:
-- `general_search`: default semantic retrieval. Use when you need relevant evidence from graph. You can specify different k values for low_level, high_level, conversations, and appearance.
-  - IMPORTANT: If the question asks about "the main character" or "the person recording", you MUST use the actual name of the Main Character provided in the Graph Summary for your `query_triples`. For example, instead of `["the main character", "do", "?"]`, use `["<Actual_Name>", "do", "?"]`.
-- `get_clip_context`: Use this when you found a relevant clip_id from `general_search` but need the full conversation and summary of that specific clip.
-- `video_rewatch`: ONLY use this when the text result is insufficient, because the cost is high. Provide the clip_id.
-
-## Constraints:
-- Do not repeat the exact same search when previous results were insufficient.
-- Be concise.
-"""
-
-prompt_answer_with_search_results_final = """
-This is the final round of the QA task.
-
-You will receive:
-1) the question
-2) options A/B/C/D
-3) accumulated retrieved evidence from all previous search rounds
-
-You must choose one option based on the accumulated retrieved evidence.
-If you are not sure, choose the option that is most supported by the evidence. Answers like "I don't know" are NOT allowed.
-The output must be exactly one letter.
-"""
 
 def build_graph_reason_human_prompt(current_round: int, max_rounds: int, query: str, choices: dict, graph: HeteroGraph) -> str:
     prompt = f"This is round {current_round} of {max_rounds}."
 
     # Graph summary logic
     main_char = graph.get_main_character()
-    main_char_info = f"Main Character of the video: {main_char}\n" if main_char else ""
+    main_char_info = f"Main Character of the video: {main_char}" if main_char else "Main Character: None explicitly defined"
+    
+    char_list = list(graph.characters.keys())
+    char_info = f"Characters in graph: {', '.join(char_list) if char_list else 'None'}"
+    
+    high_level_count = sum(1 for e in graph.edges.values() if e.clip_id == 0)
+    low_level_count = len(graph.edges) - high_level_count
+    
+    edge_info = f"Total Edges: {len(graph.edges)} (High-level: {high_level_count}, Low-level: {low_level_count})"
+    conv_info = f"Total Conversations: {len(graph.conversations)}"
+    
+    stats_summary = f"--- Graph Stats ---\n{main_char_info}\n{char_info}\n{edge_info}\n{conv_info}\n-------------------"
 
     if hasattr(graph, 'graph_summary'):
-        graph_summary = main_char_info + graph.graph_summary()
+        graph_summary = stats_summary + "\n" + graph.graph_summary()
     else:
         # Fallback if HeteroGraph in Hippo doesn't have graph_summary
         # Let's extract some high level summary
@@ -76,7 +49,7 @@ def build_graph_reason_human_prompt(current_round: int, max_rounds: int, query: 
             if edge.clip_id == 0 and edge.scene in ["high-level", "appearance"]:
                 target_str = edge.target if edge.target is not None else ""
                 high_level.append(f"{edge.source}, {edge.content}, {target_str}".strip(", "))
-        graph_summary = main_char_info + "Graph Summary:\n" + "\n".join(high_level[:100]) # top 100
+        graph_summary = stats_summary + "\nGraph Summary:\n" + "\n".join(high_level[:100]) # top 100
 
     prompt += "\n" + graph_summary + "\n"
 

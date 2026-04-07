@@ -945,10 +945,6 @@ class HeteroGraph:
         connected_edges = self.get_connected_edges(character1, character2)
         
         if not connected_edges or len(connected_edges) < 3:
-            print(
-                f"Info: Skip character_relationships for {character1}, {character2}: "
-                f"insufficient connected edges ({len(connected_edges) if connected_edges else 0} < 3)."
-            )
             return 0
         
         # Format edges as strings (one per line)
