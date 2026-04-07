@@ -29,7 +29,7 @@ def process_full_video(video_name):
     if not image_folders:
         raise ValueError(f"No frame clip folders found in {frames_dir}")
 
-    # image_folders = image_folders[:1] # Uncomment for quick debugging
+    # image_folders = image_folders[:2] # Uncomment for quick debugging
     
     previous_conversation = False
     appearance_dict = dict()    # character name → [appearance description, embedding]
@@ -53,15 +53,28 @@ def process_full_video(video_name):
             #--------------------------------
             # Only pass appearance text to prompt (exclude embeddings).
             appearance_prompt_dict = {name: value[0] for name, value in appearance_dict.items()}
-            prompt = "Character appearance from previous videos: \n" + json.dumps(appearance_prompt_dict) + "\n" + prompt_generate_episodic_memory
+            prompt = "Character appearance from previous videos: \n" + json.dumps(appearance_prompt_dict) + "\n"
+            
+            # Use graph to track main character
+            current_main_character = graph.get_main_character()
+            if current_main_character:
+                prompt += f"The main character of this video is identified as: {current_main_character}\n"
+            
+            prompt += prompt_generate_episodic_memory
+            
             messages = generate_messages(current_images, prompt)
             try:
                 response, tokens = get_response(messages, EpisodicFormat)
                 token_summaries["mllm"] += int(tokens or 0)
             except Exception as e:
                 print(f"MLLM call failed, retrying... Error: {e}")
-                response, tokens = get_response(messages, EpisodicFormat)
-                token_summaries["mllm"] += int(tokens or 0)
+                try:
+                    response, tokens = get_response(messages, EpisodicFormat)
+                    token_summaries["mllm"] += int(tokens or 0)
+                except Exception as e2:
+                    print(f"MLLM call failed again, skipping clip {clip_id}. Error: {e2}")
+                    traceback.print_exc()
+                    continue
 
             if token_summaries["mllm"] > 7000000:
                 print(f"MLLM token limit reached. Stop processing this video.")
@@ -73,6 +86,10 @@ def process_full_video(video_name):
                 conversation = response.conversation
                 characters_appearance = response.characters_appearance
                 scene = response.scene
+                
+                # Update main character in graph if identified
+                if response.main_character:
+                    graph.set_main_character(response.main_character)
             except Exception as e:
                 print(f"Error parsing response: {e}. Continuing to next clip...")
                 traceback.print_exc()
@@ -85,10 +102,15 @@ def process_full_video(video_name):
                     behaviors = behaviors[1:]
                     old_name = equivalence_parts[0].strip()
                     new_name = equivalence_parts[1].strip()
-                    graph.rename_character(old_name, new_name)
-                    if old_name in appearance_dict:
+                    renamed = graph.rename_character(old_name, new_name)
+                    if renamed and old_name in appearance_dict:
                         appearance_dict[new_name] = appearance_dict[old_name]
                         del appearance_dict[old_name]
+                    elif not renamed:
+                        print(
+                            f"Warning: rename_character failed for {old_name!r} -> {new_name!r} "
+                            "(graph unchanged; appearance_dict not updated for this equivalence)"
+                        )
                 else:
                     print(f"Warning: Malformed equivalence line '{behaviors[0]}', skipping rename")
 
@@ -149,7 +171,11 @@ def process_full_video(video_name):
             equivalence_list = merge_character_appearances(characters_appearance, appearance_dict)
             if equivalence_list:
                 for equivalence in equivalence_list:
-                    graph.rename_character(equivalence[0], equivalence[1])
+                    if not graph.rename_character(equivalence[0], equivalence[1]):
+                        print(
+                            f"Warning: rename_character failed after appearance merge "
+                            f"{equivalence[0]!r} -> {equivalence[1]!r}; graph may not match appearance_dict"
+                        )
 
             # Store episodic memory for this clip
             episodic_memory[clip_id] = {
@@ -189,8 +215,8 @@ def process_full_video(video_name):
         print("Generating character attributes...")
         print("Number of edges: ", len(graph.edges))
         degrees = graph.get_node_degrees()
-        # Select all characters whose degree is greater than 10
-        characters = [character for character in graph.characters if degrees.get(character, 0) > 10]
+        # Select all characters whose degree is greater than 10, and name doesn't start with "<the "
+        characters = [character for character in graph.characters if degrees.get(character, 0) > 10 and not character.lower().startswith("<the ")]
 
         for character in characters:
             try: 
@@ -251,28 +277,29 @@ def main():
     log_file = open("log.txt", "w", encoding="utf-8")
     sys.stdout = Tee(log_file)
     
-    if len(sys.argv) < 2: # If no video names are provided, process all videos
-        video_names = load_video_list()
-    else:
-        video_names = sys.argv[1:]
+    try:
+        if len(sys.argv) < 2:  # If no video names are provided, process all videos
+            video_names = load_video_list()
+        else:
+            video_names = sys.argv[1:]
 
-    for video_name in video_names:
-        try:
-            start_time = time.time()
-            print(f"\nProcessing {video_name}...")
-            graph, episodic_memory, token_summaries = process_full_video(video_name)
-            print(f"✓ {video_name} complete. Graph has {len(graph.characters)} characters and {len(graph.edges)} edges.")
-            print(f"Token summaries: {token_summaries}")
-            end_time = time.time()
-            print(f"Time taken: {end_time - start_time} seconds")
-        except Exception as e:
-            print(f"✗ Error processing video {video_name}: {e}")
-            traceback.print_exc()
-            print("Continuing to next video...")
-            continue
-    
-    sys.stdout = original_stdout
-    log_file.close()
+        for video_name in video_names:
+            try:
+                start_time = time.time()
+                print(f"\nProcessing {video_name}...")
+                graph, episodic_memory, token_summaries = process_full_video(video_name)
+                print(f"✓ {video_name} complete. Graph has {len(graph.characters)} characters and {len(graph.edges)} edges.")
+                print(f"Token summaries: {token_summaries}")
+                end_time = time.time()
+                print(f"Time taken: {end_time - start_time} seconds")
+            except Exception as e:
+                print(f"✗ Error processing video {video_name}: {e}")
+                traceback.print_exc()
+                print("Continuing to next video...")
+                continue
+    finally:
+        sys.stdout = original_stdout
+        log_file.close()
 
 if __name__ == "__main__":
     main()

@@ -1,148 +1,51 @@
-from concurrent.futures.process import _ResultItem
 import pickle
 import json
-import glob
 import sys
 import traceback
 from pathlib import Path
+
+from utils.langchain_helper import build_agent
+from utils.general import extract_choice_from_content, find_pkl_files, Tee
+from utils.prompts import prompt_agent_verify_answer_referencing
 from utils.llm import generate_text_response
-from utils.mllm_gpt import generate_messages, get_response
-from utils.prompts import prompt_parse_query, prompt_graph_video, prompt_video_answer, prompt_video_answer_final, prompt_agent_verify_answer_referencing
-from classes.output_structure import ParseQueryOutput, GraphOutputFormat, VideoOutputFormat
+
 from reason_ablation import reason_k30, reason_no_allocation
-from utils.search import search_with_parse
-from utils.general import find_pkl_files, Tee
 
 
-def reason(graph, video_name, question):
-
-    result = {
-        'question': question,
-        'parse_query_output': None,
-        'graph_search_results': None,
-        'decision_response': None,
-        'video_answer_outputs': [],
-        'token_summaries': {"parse_query": 0, "graph_answer": 0, "video_answer": 0}, 
-        'final_answer': None,
-    }
-    
+def reason(graph, video_name, question, options=None):
     print("================================================")
     print("Question: ", question)
     
-    #--------------------------------
-    # Part 1: Search the graph
-    #--------------------------------
-    print("\n[Step 1] Searching the graph...")
-    try:
-        # Parse query using LLM
-        parse_query_response, tokens = generate_text_response(prompt_parse_query + "\n" + question, ParseQueryOutput)
-        result['parse_query_output'] = str(parse_query_response)
-        result['token_summaries']['parse_query'] = tokens
-        print("Parse Query Output:")
-        print(parse_query_response)
-        
-        # Search the graph with parsed query
-        graph_search_results = search_with_parse(question, graph, parse_query_response)
-        result['graph_search_results'] = graph_search_results
-        
-    except Exception as e:
-        raise Exception(f"Error searching graph: {e}")
+    agent = build_agent(graph, question, options, video_name)
+
+    result = {
+        "question": question,
+        "options": options,
+        "final_answer": None,
+        "total_tokens": 0,
+        "rounds": [],
+    }
+
+    messages = []
+    messages = agent.invoke({"messages": messages})
     
-    #--------------------------------
-    # Part 2: Evaluate searched graph answer
-    #--------------------------------
-    print("\n[Step 2] Evaluating searched answer...")
-    prompt = prompt_graph_video + "\nExtracted knowledge from graph:\n" + result['graph_search_results'] + "\nQuestion: " + question
-    try:
-        decision_response, tokens = generate_text_response(prompt, GraphOutputFormat)
-        result['decision_response'] = str(decision_response)
-        result['token_summaries']['graph_answer'] = tokens
-        print("Decision response: \n", decision_response)
-    except Exception as e:
-        raise Exception(f"Error evaluating searched answer: {e}")
-    
-    # If action is Answer, return immediately
-    answer_or_search = decision_response.answer
-    content = decision_response.content
-    summary = decision_response.summary
+    for m in messages["messages"]:
+        if m.type == "tool":
+            result["rounds"].append({
+                "type": m.type,
+                "content": str(m.content),
+            })
+        elif m.type == "ai":
+            result["rounds"].append({
+                "type": m.type,
+                "content": str(m.content),
+                "tool_calls": m.tool_calls,
+            })
+            if hasattr(m, 'usage_metadata') and m.usage_metadata:
+                result["total_tokens"] += m.usage_metadata.get("total_tokens", 0)
 
-    if answer_or_search: 
-        result['final_answer'] = content
-        return result
-    
-    #--------------------------------
-    # Part 3: Watch the video clips
-    #--------------------------------
-    # Extract and validate clip IDs from decision content.
-    if not isinstance(content, list):
-        content = [content]
-    clip_ids = []
-    for item in content:
-        try:
-            clip_ids.append(int(item))
-        except Exception:
-            print(f"Warning: Ignoring invalid clip id from decision output: {item}")
-    if not clip_ids:
-        raise Exception(f"No valid clip ids returned for video search. Raw content: {content}")
-    if len(clip_ids) > 5:
-        clip_ids = clip_ids[:5]
-
-    print(f"\n[Step 3] Watching video clips: {clip_ids}")
-    summary_dict = dict()
-
-    for clip_id in clip_ids[:-1]:
-        print(f"Processing clip {clip_id}...")
-
-        prompt = prompt_video_answer + "\nQuestion: " + question + "\nCurrent clip ID: " + str(clip_id) + "\nPrevious summaries:\n"
-        if summary:
-            prompt += str(summary)
-        for key, value in summary_dict.items():
-            prompt += "\n" + f"Clip {key}: {value}"
-
-        frames_dir = Path(f"data/frames/{video_name}") / str(clip_id)
-        images = sorted(glob.glob(str(frames_dir / "*.jpg")), key=lambda x: int(Path(x).stem))
-
-        try:
-            messages = generate_messages(images, prompt)
-            response, tokens = get_response(messages, VideoOutputFormat)
-            answer_or_search = response.answer
-            clip_summary = response.content
-            result['token_summaries']['video_answer'] += int(tokens or 0)
-        except Exception as e:
-            raise Exception(f"Error processing clip {clip_id}: {e}")
-
-        result['video_answer_outputs'].append(str(response))
-
-        if answer_or_search: 
-            result['final_answer'] = clip_summary
-            print("Final answer: \n", result['final_answer'])
-            return result
-        else:
-            summary_dict[clip_id] = clip_summary
-
-    # Watch last clip
-    clip_id = clip_ids[-1]
-    print(f"Processing last clip {clip_id}...")
-    prompt = prompt_video_answer_final + "\nQuestion: " + question + "\nCurrent clip ID: " + str(clip_id) + "\nPrevious summaries:\n"
-    if summary:
-        prompt += str(summary)
-    for key, value in summary_dict.items():
-        prompt += "\n" + f"Clip {key}: {value}"
-    frames_dir = Path(f"data/frames/{video_name}") / str(clip_id)
-    images = sorted(glob.glob(str(frames_dir / "*.jpg")), key=lambda x: int(Path(x).stem))
-
-    try:
-        messages = generate_messages(images, prompt)
-        response, tokens = get_response(messages)
-        if response is None or (isinstance(response, str) and not response.strip()):
-            # Fallback: use last summary or placeholder so final_answer is never null
-            response = (
-                summary_dict[clip_ids[-2]] if len(clip_ids) >= 2 and clip_ids[-2] in summary_dict
-                else "No answer could be generated from the video."
-            )
-        result['final_answer'] = response
-    except Exception as e:
-        raise Exception(f"Error processing last clip {clip_id}: {e}")
+    final_answer_option = extract_choice_from_content(messages["messages"][-1].content)
+    result["final_answer"] = final_answer_option
     
     print("Final Answer:")
     print(result['final_answer'])
@@ -165,7 +68,6 @@ def evaluate_answer(question, ground_truth_answer, predicted_answer):
         elif response.startswith("NO"):
             return False
         else:
-            # If response is ambiguous, default to False
             print(f"Warning: Unexpected evaluator response: {response}. Defaulting to False.")
             return False
     except Exception as e:
@@ -179,14 +81,20 @@ def main():
     log_file = open("log.txt", "w", encoding="utf-8")
     sys.stdout = Tee(log_file)
 
-    # If no video names are provided, process all available graph files.
     if len(sys.argv) < 2:
         available_videos = sorted(find_pkl_files())
     else:
         available_videos = sys.argv[1:]
 
-    with open(f"data/robot.json", "r", encoding="utf-8") as f:
-        questions_data = json.load(f)
+    questions_data = {}
+    with open("data/questions.jsonl", "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip(): continue
+            item = json.loads(line)
+            vid = item.get("video_id")
+            if vid not in questions_data:
+                questions_data[vid] = {"qa_list": []}
+            questions_data[vid]["qa_list"].append(item)
 
     for video_name in available_videos:
         print("================================================")
@@ -204,63 +112,54 @@ def main():
         video_questions = questions_data.get(video_name, {}).get("qa_list", [])
         reasoning_results = {}
 
-        for video_question in video_questions:
+        for i, video_question in enumerate(video_questions, 1):
             question_id = video_question.get("question_id")
-            question = video_question.get("question", "")
-            answer = video_question.get("answer", "")
+            if question_id is None:
+                question_id = i
+            q_text = video_question.get("question_text", "")
+            options = video_question.get("options", {})
+            opts_str = "\n".join([f"{k}: {v}" for k, v in options.items()])
+            question = f"{q_text}\nOptions:\n{opts_str}\nPlease output ONLY a single letter (A, B, C, or D) corresponding to the correct option."
+            answer = video_question.get("correct_answer", "")
 
             try:
-                main_result = reason(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, main_result["final_answer"])
+                main_result = reason(graph, video_name, question, options)
+                
+                final_ans_str = str(main_result.get("final_answer", "")).strip().upper()
+                extracted_letter = None
+                for char in final_ans_str:
+                    if char in ['A', 'B', 'C', 'D']:
+                        extracted_letter = char
+                        break
+                
+                if extracted_letter:
+                    evaluate_correct = (extracted_letter == answer.strip().upper())
+                else:
+                    print(f"Warning: Could not extract valid option (A, B, C, D) from answer: {final_ans_str}")
+                    evaluate_correct = False
+                    
+                print("Evaluate Correct: ", evaluate_correct)
                 main_result["evaluate_correct"] = evaluate_correct
+                main_result["ground_truth_answer"] = answer
+                main_result["timestamp"] = video_question.get("timestamp")
+                main_result["type"] = video_question.get("category")
+                
+                reasoning_results[question_id] = main_result
+                
             except Exception as e:
                 print(f"Error processing question {question_id}: {e}")
                 traceback.print_exc()
-                main_result = str(e)
+                reasoning_results[question_id] = {
+                    "question": question,
+                    "ground_truth_answer": answer,
+                    "error": str(e),
+                    "timestamp": video_question.get("timestamp"),
+                    "type": video_question.get("category")
+                }
 
-            try:
-                result_k30 = reason_k30(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_k30["final_answer"])
-                result_k30["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_k30 = str(e)
-
-            try:
-                result_no_allocation = reason_no_allocation(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_no_allocation["final_answer"])
-                result_no_allocation["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_no_allocation = str(e)
-
-            # try:
-            #     result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
-            #     evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
-            #     result_no_video_rewatch["evaluate_correct"] = evaluate_correct
-            # except Exception as e:
-            #     print(f"Error processing question {question_id}: {e}")
-            #     traceback.print_exc()
-            #     result_no_video_rewatch = str(e)
-
-            # reasoning_results[question_id] = {
-            #     "question": question,
-            #     "ground_truth_answer": answer,
-            #         # Backward-compatible main payload key.
-            #         "reasoning": main_result,
-            #         "ablations": {
-            #             "k30": result_k30,
-            #             "no_allocation": result_no_allocation,
-            #             "no_video_rewatch": result_no_video_rewatch,
-            #         },
-            #     "timestamp": video_question.get("timestamp"),
-            #     "type": video_question.get("type"),
-            # }
-
-        with open(output_json_path, "w") as f:
-            json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
+            # Save iteratively after each question
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
         print(f"\n✓ Saved reasoning results for {video_name} to {output_json_path}")
 
     sys.stdout = original_stdout

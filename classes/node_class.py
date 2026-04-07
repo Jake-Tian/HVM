@@ -25,6 +25,7 @@ class CharacterNode(BaseNode):
         super().__init__(name)
         # Embedding will be generated in batch later via node_embedding_insertion()
         self.embedding = embedding
+        self.is_main_character = False
 
 class ObjectNode(BaseNode):
     

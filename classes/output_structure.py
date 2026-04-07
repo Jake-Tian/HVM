@@ -10,6 +10,7 @@ class EpisodicFormat(BaseModel):
     conversation: list[list[str]]
     characters_appearance: list[Appearance]
     scene: str
+    main_character: str | None
 
 class ConversationSummary(BaseModel):
     summary: str

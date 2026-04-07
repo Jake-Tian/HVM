@@ -11,6 +11,7 @@ Your tasks:
      (b) Interaction with other characters.
      (c) Actions and movements.
    - Do NOT repeat the information from the conversation. 
+   - No need to describe the behavior for every character appear in the video. If you consider a group of characters unimportant (as the background characters), you can refer them as the <the crowd>, or just ignore them.
    - When the character interacts with objects in the scene, include precise location information for placement, retrieval, or movement:
      - Furniture/container names: "dressing table", "bedside table", "wardrobe", "shoe cabinet", "refrigerator", "microwave oven"
      - Spatial modifiers: "below", "above", "left side", "right side", "beside", "in front of", "next to", "under", "on the counter"
@@ -21,11 +22,12 @@ Your tasks:
       "<Alice> takes cap from the cabinet on the left side of the wardrobe.", 
       "<Alice> sits with <Bob> side by side on the couch.", 
       "<Bob> watches TV.", 
-      "<robot> puts the coffee on the table."]
+      "<character_1> puts the coffee on the table."]
 
 2. **Conversation**
    - Record the dialogue based on subtitles.
    - Always use characters' real name existed in the subtitle.
+   - From the subtitle, if the speaker does not appear in the scene and the speaker cannot be deduced from the context, assume they are the main character.
    - Output format: List of two-element lists [character, content].
    - Example output: [["<Alice>", "Hello, my name is Alice."], ["<Bob>", "Hi, I'm Bob. Nice to meet you."]]
 
@@ -40,25 +42,24 @@ Your tasks:
 
 4. **Scene**: Use one word or phrase to describe the scene in the current video (eg. "bedroom", "gym", "office", etc.).
 
+5. **Main Character**: Identify the main character of the video. The main character can be either a character name (eg. <Alice>) or a placeholder (eg. <character_1>).
+
 ## Character Naming Rules:
-- Use angle brackets to represent characters (eg. <Alice>, <Bob>, <robot>, <character_1> etc.) in behaviors, conversation, and character appearance.
-- Include the robot (<robot>) if present:
-  - It wears black gloves and has no visible face (it holds the camera).
-  - Describe its behavior and conversation.
-  - Do NOT include robot in character appearance information, but include it in behaviors and conversation.
-- There are two types of characters: named characters and unknown characters.
-  - Named characters are characters with a known name (eg. <Alice>, <Bob>, <robot>).
-  - Unknown characters are characters with an unknown name (eg. <character_1>, <character_2>, etc.).
+- The character names from the video are initially unknown.
+- You can refer to characters by <character_1>, <character_2>, etc., or by their job if it can be easily deduced (eg. <police>). Do not use the job method if you are unsure.
+- Use the character's name only if it can be explicitly extracted from the conversation (eg. <Anna>).
+- Use angle brackets to represent characters in behaviors, conversation, and character appearance.
+
 
 ## Character Matching Rules:
 For characters appearing in the video (MUST follow before creating new characters):
-- First, check if the subtitle name is provided. If so, use it as the character name (eg. <Anna>). 
-  - Also compare the character name with the unknown characters (<character_X>) in the appearance list. 
-    - If high similarity is found, add "Equivalence: <character_X>, <Anna>" at **start of behaviors**. This indicates that the character is the same as the unknown character.
-    - If the equivalence is found, refer to this character by its character name instead of <character_X> in the behaviors, conversation, and character appearance.
-- If a character's name is not provided in the subtitle, match this character's appearance to the characters in the appearance list. 
-  - If high similarity is found, refer to this character by its name in the appearance list. 
-  - If no match is found, create a new unknown character with lowest available number starting from <character_1>. 
+- First, check if the subtitle name or name from conversation is provided. If so, use it as the character name (eg. <Anna>). 
+  - Also compare the character name with the unknown characters (eg. <character_1>, <character_2>) in the appearance list. 
+    - If high similarity is found, add "Equivalence: <character_1>, <Anna>" at **start of behaviors**. This indicates that the character is the same as the unknown character.
+    - If the equivalence is found, refer to this character by its character name instead of <character_1> in the behaviors, conversation, and character appearance.
+- If a character's name is not provided, match this character's appearance to the characters in the appearance list. 
+  - If high similarity is found, refer to this character by its name in the appearance list (eg. <character_1>). 
+  - If no match is found, create a new unknown character following the naming rules (eg. <character_2>). 
   - Our goal is to minimize the number of unknown characters. When uncertain, match to existing rather than creating new.
 
 Additional Rules:
@@ -110,7 +111,7 @@ No explanation. No markdown. No extra text.
   - Characters (use verbatim names with angle brackets)
   - Objects (nouns, physical or abstract)
 - **Character/Object format rule (STRICT)**:
-  - Characters: must keep angle brackets, e.g. `<Alice>`, `<robot>`, `<character_1>`.
+  - Characters: must keep angle brackets, e.g. `<Alice>`, `<character_1>`.
   - Objects: must **NOT** use angle brackets.
   - If an object appears with angle brackets in input, remove them in output.
 - Copy entity names **verbatim** (except removing angle brackets from objects)
@@ -174,7 +175,7 @@ Examples:
 - For location/spatial relations, put location information in the **content** field and keep
   source/target as clean entities (character or noun). Do NOT put long location phrases in target.
 Examples:
-- "<robot> puts coffee on table" → ["<robot>", "puts", "coffee"], ["coffee", "is on", "table"]
+- "<character_1> puts coffee on table" → ["<character_1>", "puts", "coffee"], ["coffee", "is on", "table"]
 - "<Alice> takes towel from Susan's bag" → ["<Alice>", "takes", "towel"], ["towel", "is in", "Susan's bag"]
 - "<Betty> sits on the right side of the sofa" → ["<Betty>", "sits on the right side of", "sofa"]
 
@@ -194,7 +195,7 @@ If unsure, output a **minimal transformation**:
 Input:
 [
   "<Michael> pats <Susan>'s shoulder and smiles.",
-  "<robot> places the red cup on the counter.",
+  "<character_1> places the red cup on the counter.",
   "<Lisa> dances and sings happily.",
   "<John> takes his wallet and keys from the drawer.", 
   "<Betty> carries a red plastic bag in her left hand and a white plastic bag in her right hand."
@@ -204,7 +205,7 @@ Output:
 [
   ["<Michael>", "pats shoulder", "<Susan>"],
   ["<Michael>", "smiles", null],
-  ["<robot>", "places", "red cup"],
+  ["<character_1>", "places", "red cup"],
   ["red cup", "is on", "counter"],
   ["<Lisa>", "dances happily", null],
   ["<Lisa>", "sings happily", null],
@@ -233,7 +234,7 @@ The input consists of multiple clips, each with:
 - Include key actions, character interactions, and scene transitions
 - Use natural, flowing language (not a bulleted list)
 - Focus on the main narrative flow and significant events
-- Keep character names as provided (e.g., <character_1>, <robot>)
+- Keep character names as provided (e.g., <character_1>, <Michael>)
 - Do not include clip numbers or scene labels in the summary
 - There might be conflict or misleading information provided, you should be able to handle it and provide a coherent summary.
 
@@ -390,7 +391,7 @@ Given a query and budget `k=50`, output:
   - "where is X now?" → Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
   - "last time" / "last place" → Use triple `[X, "is at", "?", ...]` and prioritize edges with highest clip_id values.
   - "where should X be placed?" → Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]` to find placement instructions.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" → Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can <character_1> get X?" / "where did X get Y from?" → Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 - **Allocation for location queries**: Prioritize low-level edges (35-45) since they contain spatial information. Use conversations (5-10) only if placement instructions might be mentioned in dialogue.
 
 2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
@@ -522,7 +523,7 @@ Given a query and budget `k=30`, output:
   - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
   - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]` and prioritize edges with highest clip_id values.
   - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]` to find placement instructions.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can <character_1> get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 - **Allocation for location queries**: Prioritize low-level edges (18-24) since they contain spatial information. Use conversations (3-6) only if placement instructions might be mentioned in dialogue.
 
 2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
@@ -633,7 +634,7 @@ Given a query, output:
   - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X.
   - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]`.
   - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]`.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]`. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can <character_1> get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]`. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 
 2. **speaker_strict**:
    - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
@@ -805,7 +806,7 @@ GraphVideoOutput(
 )
 
 Question: How many times was the air-conditioning remote used?
-Extracted information: High-level: (no count information) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
+Extracted information: High-level: (no count information) Low-level: [8] <character_1> uses air-conditioning remote. (meeting room) [11] <character_1> uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
 GraphVideoOutput(
   answer=False,
@@ -935,7 +936,7 @@ GraphVideoOutput(
 )
 
 Question: How many times was the air-conditioning remote used?
-Extracted information: High-level: (not available) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
+Extracted information: High-level: (not available) Low-level: [8] <character_1> uses air-conditioning remote. (meeting room) [11] <character_1> uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
 GraphVideoOutput(
   answer=False,
@@ -1042,7 +1043,7 @@ VideoOutputFormat(
 Question: How many times was the air-conditioning remote used?
 Current clip ID: 11
 Previous summaries: Clip 8: The air-conditioning remote was used once. Clip 9: No remote usage. Clip 10: No remote usage.
-Video shows: Robot uses the air-conditioning remote once
+Video shows: <character_1> uses the air-conditioning remote once
 Output:
 VideoOutputFormat(
   answer=False,

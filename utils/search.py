@@ -81,6 +81,7 @@ def search_with_parse(query, graph, parse_query_response):
             f"Got: {type(parse_query_response).__name__}"
         )
 
+
     # Search the graph
     try:
         # Search in two independent parts with separate k budgets.

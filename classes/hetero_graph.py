@@ -19,13 +19,11 @@ class HeteroGraph:
         self.conversations = {}   # id → Conversation object
         self.edges = {}   # id → Edge object
         self.current_conversation_id = None  # Track the most recent conversation ID
+        self.main_character = None  # Track the main character of the video
 
         # adjacency lists for O(1) search
         self.adjacency_list_out = defaultdict(list)  # node → list of edge IDs (outgoing edges)
         self.adjacency_list_in = defaultdict(list)   # node → list of edge IDs (incoming edges)
-
-        robot = CharacterNode("<robot>")
-        self.characters[robot.name] = robot
 
 
     # --------------------------------------------------------
@@ -130,9 +128,24 @@ class HeteroGraph:
         # Remove old character node after rewiring.
         del self.characters[old_name]
 
+        # Update main character if it was the one being renamed/merged.
+        if self.main_character == old_name:
+            self.main_character = new_name_stored
+
         print(f"Renamed character: {old_name} -> {new_name_stored}")
 
         return True
+
+    def set_main_character(self, name):
+        """Set the main character of the video. Ensures angle brackets."""
+        if name:
+            if not name.startswith("<") or not name.endswith(">"):
+                name = f"<{name}>"
+            self.main_character = name
+
+    def get_main_character(self):
+        """Get the main character of the video."""
+        return self.main_character
     
     def get_node_degrees(self):
         """
@@ -414,8 +427,7 @@ class HeteroGraph:
         best_similarity = 0.0
         
         for existing_char_name in self.characters:
-            # Only consider <character_X> for removal (not named characters, not robot)
-            if not existing_char_name.startswith("<character_") or existing_char_name == "<robot>":
+            if not existing_char_name.startswith("<character_"):
                 continue
             
             # Get appearance for existing character
