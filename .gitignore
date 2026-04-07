@@ -8,6 +8,7 @@ __pycache__/
 # Data file
 data/*
 !data/robot.json
+!data/questions.jsonl
 
 # Visualization output
 visualization/

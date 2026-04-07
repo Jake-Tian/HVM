@@ -7,6 +7,9 @@ requests>=2.31.0
 tqdm>=4.66.0
 
 huggingface-hub>=0.20.0
+langchain>=0.3.0
+langgraph>=0.2.0
+typing-extensions>=4.8.0
 
 # Visualization (for visualization/visualize_graph_dedup.py, graph_to_html.py, graph_to_picture.py)
 # pyvis>=0.3.0
