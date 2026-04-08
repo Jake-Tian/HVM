@@ -2,22 +2,21 @@
 set -euo pipefail
 
 # Run full pipeline per video. Videos can be processed in parallel.
-# 0) Download required HF data folder
-# 1) Download MP4
-# 2) Add subtitles + extract frames
-# 3) Build graph memory
-# 4) Answer questions with reason.py → per-video reasoning files
-# 5) Cleanup MP4 and frames
+# 0) Download shared audio data
+# 1) Download video frames from HF
+# 2) Build graph memory
+# 3) Answer questions with reason.py → per-video reasoning files
+# 4) Cleanup frames
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 # Step 0: Ensure required data folder exists (data/ is gitignored)
 echo "Preparing shared data folder..."
-if python3 preprocessing/download_hf_folder.py; then
-  echo "✓ Subtitles downloaded"
+if python3 preprocessing/download_hf_audio.py; then
+  echo "✓ Audio downloaded"
 else
-  echo "✗ Failed to download subtitles"
+  echo "✗ Failed to download audio"
   exit 1
 fi
 echo ""
