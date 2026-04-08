@@ -960,6 +960,7 @@ Input:
 
 Output ('Yes' or 'No'):"""
 
+
 prompt_agent = """
 You will receive:
 1) a user question
@@ -968,19 +969,43 @@ You will receive:
 
 Your task is to decide whether the retrieved results are sufficient to answer the question.
 
+## Question Type Inference:
+You must determine the type of information needed by analyzing the question and options:
+- **Auditory**: If the question asks about background sounds, noises, music, or specific things "heard".
+- **Visual (High-Detail)**: If the question asks about colors, logos, small objects, text on signs, or specific visual patterns not clearly described in text.
+- **Narrative/Action**: If the question asks about character actions, plans, or overall story.
+
+## Tool usage guidance:
+- `general_search`: Use this FIRST for all questions to get a temporal anchor. 
+  - **Logic**: Use this to find the relevant `clip_id` (indicated as `[clip_id]` in the results).
+  - **Triple Weight Rules**:
+     - **High (0.7-1.0)**: Specific character/object names (e.g., `<Alice>`, `coffee`, `screwdriver`).
+     - **Medium (0.4-0.7)**: General objects/locations (e.g., `cup`, `room`).
+     - **Low (0.1-0.4)**: Vague terms or what you are searching for (e.g., "?").
+  - **Budget Allocation**: Total <= 50. Use ~30-40 for the primary modality (conversations for dialogue, low_level for actions).
+
+- `listen_to_audio(clip_id)`: Use this ONLY after finding a candidate `clip_id` via `general_search`.
+  - Mandatory for **Auditory** questions. 
+  - Pick the `clip_id` where the relevant event or dialogue was mentioned in the `general_search` results.
+
+- `video_rewatch(clip_id)`: Use this ONLY after finding a candidate `clip_id` via `general_search`.
+  - Mandatory for **Visual (High-Detail)** questions if the text descriptions are too vague to distinguish options.
+  - Look for the `clip_id` where the object or person in question is mentioned or active.
+
+- `get_clip_context(clip_id)`: Use this to get the full surrounding conversation and summary for a specific clip found via `general_search`.
+
+## Strategy for Clip ID Selection:
+1. When `general_search` returns multiple results, look for the `[clip_id]` next to the most relevant triple or message.
+2. If the results show a character "mentioning" a place in clip A but "being" at that place in clip B, choose the `clip_id` that matches the question's context (e.g., "When she mentions..." vs "When she is at...").
+3. Use that specific `clip_id` as the input for `listen_to_audio`, `video_rewatch`, or `get_clip_context`.
+
 ## Decision:
 1. If sufficient:
    - return a single letter (A/B/C/D) that indicates the best option.
 2. If insufficient:
-   - Choose the most suitable search tool for the next round.
-   - explicitly identify the missing knowledge and update the next query to target that gap.
-   - write a concise summary of the current search results relevant to the question.
-
-## Tool usage guidance:
-- `general_search`: default semantic retrieval. Use when you need relevant evidence from graph. You can specify different k values for low_level, high_level, conversations, and appearance.
-  - IMPORTANT: If the question asks about "the main character" or "the person recording", you MUST use the actual name of the Main Character provided in the Graph Summary for your `query_triples`. For example, instead of `["the main character", "do", "?"]`, use `["<Actual_Name>", "do", "?"]`.
-- `get_clip_context`: Use this when you found a relevant clip_id from `general_search` but need the full conversation and summary of that specific clip.
-- `video_rewatch`: ONLY use this when the text result is insufficient, because the cost is high. Provide the clip_id.
+   - Choose the next tool based on the inference above.
+   - explicitly identify the missing knowledge and the target `clip_id`.
+   - write a concise summary of the current search results.
 
 ## Constraints:
 - Do not repeat the exact same search when previous results were insufficient.

@@ -1,12 +1,29 @@
 import glob
+import os
+import tempfile
 from pathlib import Path
 from langchain.tools import tool
+from moviepy import AudioFileClip
 
 from classes.hetero_graph import HeteroGraph
 from utils.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
 from utils.prompts import prompt_video_answer
-from utils.mllm_gpt import generate_messages, get_response
+from utils.mllm_gpt import generate_messages, generate_audio_messages, get_response
 from classes.output_structure import VideoOutputFormat
+
+class TempAudio:
+    def __init__(self, audio_clip, start, end, video_name):
+        self.temp_dir = Path("data/audio/tmp")
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.temp_dir / f"{video_name}_{start}_{end}.wav"
+        audio_clip.subclip(start, end).write_audiofile(str(self.path), logger=None)
+    
+    def __del__(self):
+        if hasattr(self, "path") and self.path.exists():
+            try:
+                os.remove(self.path)
+            except:
+                pass
 
 def get_tools(graph: HeteroGraph, video_name: str, query: str):
 
@@ -123,4 +140,38 @@ def get_tools(graph: HeteroGraph, video_name: str, query: str):
         except Exception as e:
             return f"Error in video rewatch: {str(e)}"
 
-    return [general_search, get_clip_context, video_rewatch]
+    @tool
+    def listen_to_audio(clip_id: int) -> str:
+        """
+        Listen to the audio segment around a specific clip_id to identify background sounds or auditory details.
+        Use this after finding a relevant clip_id via general_search.
+        
+        Args:
+            clip_id: ID of the clip to listen to.
+        """
+        audio_file = Path(f"data/audio/{video_name}.wav")
+        if not audio_file.exists():
+            return f"Audio file {audio_file} not found."
+            
+        try:
+            # Calculate 60s window centered on the 30s clip
+            # clip 1: 0-30s. Center is 15s. Window: 0-45s (limited by start)
+            # clip_id T: (T-1)*30 to T*30. Center: (T-0.5)*30
+            center = (clip_id - 0.5) * 30
+            start = max(0, center - 30)
+            
+            with AudioFileClip(str(audio_file)) as full_audio:
+                end = min(full_audio.duration, center + 30)
+                temp = TempAudio(full_audio, start, end, video_name)
+                
+                prompt = f"You are listening to a 60-second audio segment from a vlog (Clip {clip_id} ± 15s). \nQuestion: {query}\n\nTasks:\n1. Identify prominent background sounds (birds, traffic, music, etc.).\n2. If the question asks about a specific sound or audio-visual alignment, describe exactly what you hear during this period.\n3. Answer the question based ONLY on this audio."
+                
+                messages = generate_audio_messages(temp.path, prompt)
+                response_text, _ = get_response(messages)
+                
+                # Cleanup happens on __del__ but we can force it or just return
+                return f"Audio Analysis for clip {clip_id} ({start:.1f}s to {end:.1f}s): {response_text}"
+        except Exception as e:
+            return f"Error in listen_to_audio: {str(e)}"
+
+    return [general_search, get_clip_context, video_rewatch, listen_to_audio]

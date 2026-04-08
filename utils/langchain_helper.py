@@ -31,25 +31,33 @@ def build_graph_reason_human_prompt(current_round: int, max_rounds: int, query: 
     char_list = list(graph.characters.keys())
     char_info = f"Characters in graph: {', '.join(char_list) if char_list else 'None'}"
     
+    obj_count = len(graph.objects)
+    
     high_level_count = sum(1 for e in graph.edges.values() if e.clip_id == 0)
     low_level_count = len(graph.edges) - high_level_count
     
+    max_clip = max((e.clip_id for e in graph.edges.values() if e.clip_id is not None), default=0)
+    
     edge_info = f"Total Edges: {len(graph.edges)} (High-level: {high_level_count}, Low-level: {low_level_count})"
+    node_info = f"Total Object Nodes: {obj_count}"
+    clip_info = f"Total Clips: {max_clip}"
     conv_info = f"Total Conversations: {len(graph.conversations)}"
     
-    stats_summary = f"--- Graph Stats ---\n{main_char_info}\n{char_info}\n{edge_info}\n{conv_info}\n-------------------"
+    construction_info = (
+        "Graph Construction Info:\n"
+        "- The video is divided into 30-second clips (Clip 1 = 0-30s, Clip 2 = 30-60s, etc.).\n"
+        "- Character nodes are always enclosed in angle brackets (e.g., <Angela>, <staff>).\n"
+        "- Object nodes are in plain text without brackets (e.g., coffee, table).\n"
+        "- High-level edges (clip_id=0) represent overall attributes and relationships.\n"
+        "- Low-level edges represent specific actions/states occurring in specific clips."
+    )
+    
+    stats_summary = f"--- Graph Stats ---\n{main_char_info}\n{char_info}\n{node_info}\n{edge_info}\n{conv_info}\n{clip_info}\n\n{construction_info}\n-------------------"
 
     if hasattr(graph, 'graph_summary'):
-        graph_summary = stats_summary + "\n" + graph.graph_summary()
+        graph_summary = stats_summary
     else:
-        # Fallback if HeteroGraph in Hippo doesn't have graph_summary
-        # Let's extract some high level summary
-        high_level = []
-        for edge in graph.edges.values():
-            if edge.clip_id == 0 and edge.scene in ["high-level", "appearance"]:
-                target_str = edge.target if edge.target is not None else ""
-                high_level.append(f"{edge.source}, {edge.content}, {target_str}".strip(", "))
-        graph_summary = stats_summary + "\nGraph Summary:\n" + "\n".join(high_level[:100]) # top 100
+        graph_summary = stats_summary
 
     prompt += "\n" + graph_summary + "\n"
 

@@ -83,3 +83,36 @@ def generate_messages(images, prompt):
         "content": content
     }]
     return messages
+
+
+def generate_audio_messages(audio_path, prompt):
+    """
+    Build messages from a single audio file.
+    Args:
+        audio_path: path to the .wav file
+        prompt: text prompt
+    """
+    with open(audio_path, "rb") as f:
+        audio_data = f.read()
+    
+    base64_audio = base64.b64encode(audio_data).decode("utf-8")
+
+    content = [
+        {
+            "type": "input_text",
+            "text": prompt
+        },
+        {
+            "type": "input_audio",
+            "audio": {
+                "data": base64_audio,
+                "format": "wav"
+            }
+        }
+    ]
+
+    messages = [{
+        "role": "user",
+        "content": content
+    }]
+    return messages
