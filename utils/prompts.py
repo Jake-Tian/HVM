@@ -20,8 +20,7 @@ Your tasks:
      ["<Alice> enters the room.", 
       "<Alice> takes cap from the cabinet on the left side of the wardrobe.", 
       "<Alice> sits with <Bob> side by side on the couch.", 
-      "<Bob> watches TV.", 
-      "<robot> puts the coffee on the table."]
+      "<Bob> watches TV."]
 
 2. **Conversation**
    - Record the dialogue based on subtitles.
@@ -38,28 +37,39 @@ Your tasks:
      [Appearance(name="<Alice>", appearance="female, fat, ponytail, wear glasses, short-sleeved shirt, blue jeans, white sneakers"),
       Appearance(name="<Bob>", appearance="male, thin, short hair, no glasses, black jacket, black pants, black shoes")]
 
-4. **Scene**: Use one word or phrase to describe the scene in the current video (eg. "bedroom", "gym", "office", etc.).
+4. **Scene**: Use one word or phrase to describe the scene in the current video (eg. "bedroom", "gym", "office", etc.). This field is optional and should only be provided if the scene is clearly identifiable.
+
+5. **OCR Information**
+   - Extract text information visible in the video frames, such as:
+     - Remarks or notes in the video.
+     - Signs in a store, labels on products, or text on posters.
+     - Any other visible text that is NOT a subtitle.
+   - For each extracted text, provide:
+     (a) Context: A simple description of where the information was extracted (e.g., "sign in the store", "remark in the video", "label on the box").
+     (b) Content: The actual text content.
+   - Do NOT include subtitle information here; subtitles should only be recorded in the **Conversation** section.
+   - Example output:
+     [OCR(context="sign in the store", content="Open 24 Hours"),
+      OCR(context="remark in the video", content="Special Offer: 50% Off")]
 
 ## Character Naming Rules:
-- Use angle brackets to represent characters (eg. <Alice>, <Bob>, <robot>, <character_1> etc.) in behaviors, conversation, and character appearance.
-- Include the robot (<robot>) if present:
-  - It wears black gloves and has no visible face (it holds the camera).
-  - Describe its behavior and conversation.
-  - Do NOT include robot in character appearance information, but include it in behaviors and conversation.
-- There are two types of characters: named characters and unknown characters.
-  - Named characters are characters with a known name (eg. <Alice>, <Bob>, <robot>).
-  - Unknown characters are characters with an unknown name (eg. <character_1>, <character_2>, etc.).
+- Use angle brackets to represent characters (eg. <Alice>, <Bob>, <male_1> etc.) in behaviors, conversation, and character appearance.
+- There are three cases to name a character:
+  1. The name can be deduced from the conversation or subtitles. Refer to the character by his/her name (e.g., <Alice>, <Bob>).
+  2. The name is not provided, but you can deduce the character's job or identity (e.g., police, mailsman). Refer to the character by <job_number> (e.g., <police_1>, <mailsman_1>). Only refer to a character by their job when it is clear. Do not make any unsure guesses on a character's job.
+  3. Neither the name nor the job can be inferred. Name the character by gender and a number (e.g., <male_1>, <male_2>, <female_1>).
+- For the second and third cases, if the character's name is provided in the following video clips, use the equivalence line to update the character's name.
 
 ## Character Matching Rules:
 For characters appearing in the video (MUST follow before creating new characters):
 - First, check if the subtitle name is provided. If so, use it as the character name (eg. <Anna>). 
-  - Also compare the character name with the unknown characters (<character_X>) in the appearance list. 
-    - If high similarity is found, add "Equivalence: <character_X>, <Anna>" at **start of behaviors**. This indicates that the character is the same as the unknown character.
-    - If the equivalence is found, refer to this character by its character name instead of <character_X> in the behaviors, conversation, and character appearance.
+  - Also compare the character name with the unknown characters (e.g., <male_1>, <police_1>) in the appearance list. 
+    - If high similarity is found, add "Equivalence: <unknown_id>, <Anna>" at **start of behaviors**. This indicates that the character is the same as the previously identified unknown character.
+    - If the equivalence is found, refer to this character by its character name instead of the unknown ID in the behaviors, conversation, and character appearance.
 - If a character's name is not provided in the subtitle, match this character's appearance to the characters in the appearance list. 
   - If high similarity is found, refer to this character by its name in the appearance list. 
-  - If no match is found, create a new unknown character with lowest available number starting from <character_1>. 
-  - Our goal is to minimize the number of unknown characters. When uncertain, match to existing rather than creating new.
+  - If no match is found, create a new character following the naming rules above.
+  - Our goal is to minimize the number of unique character IDs. When uncertain, match to existing rather than creating new.
 
 Additional Rules:
 - Maintain strict chronological order.
@@ -110,7 +120,7 @@ No explanation. No markdown. No extra text.
   - Characters (use verbatim names with angle brackets)
   - Objects (nouns, physical or abstract)
 - **Character/Object format rule (STRICT)**:
-  - Characters: must keep angle brackets, e.g. `<Alice>`, `<robot>`, `<character_1>`.
+  - Characters: must keep angle brackets, e.g. `<Alice>`, `<male_1>`, `<police_1>`.
   - Objects: must **NOT** use angle brackets.
   - If an object appears with angle brackets in input, remove them in output.
 - Copy entity names **verbatim** (except removing angle brackets from objects)
@@ -174,7 +184,7 @@ Examples:
 - For location/spatial relations, put location information in the **content** field and keep
   source/target as clean entities (character or noun). Do NOT put long location phrases in target.
 Examples:
-- "<robot> puts coffee on table" → ["<robot>", "puts", "coffee"], ["coffee", "is on", "table"]
+- "<Alice> puts coffee on table" → ["<Alice>", "puts", "coffee"], ["coffee", "is on", "table"]
 - "<Alice> takes towel from Susan's bag" → ["<Alice>", "takes", "towel"], ["towel", "is in", "Susan's bag"]
 - "<Betty> sits on the right side of the sofa" → ["<Betty>", "sits on the right side of", "sofa"]
 
@@ -194,7 +204,7 @@ If unsure, output a **minimal transformation**:
 Input:
 [
   "<Michael> pats <Susan>'s shoulder and smiles.",
-  "<robot> places the red cup on the counter.",
+  "<male_1> places the red cup on the counter.",
   "<Lisa> dances and sings happily.",
   "<John> takes his wallet and keys from the drawer.", 
   "<Betty> carries a red plastic bag in her left hand and a white plastic bag in her right hand."
@@ -204,7 +214,7 @@ Output:
 [
   ["<Michael>", "pats shoulder", "<Susan>"],
   ["<Michael>", "smiles", null],
-  ["<robot>", "places", "red cup"],
+  ["<male_1>", "places", "red cup"],
   ["red cup", "is on", "counter"],
   ["<Lisa>", "dances happily", null],
   ["<Lisa>", "sings happily", null],
@@ -233,7 +243,7 @@ The input consists of multiple clips, each with:
 - Include key actions, character interactions, and scene transitions
 - Use natural, flowing language (not a bulleted list)
 - Focus on the main narrative flow and significant events
-- Keep character names as provided (e.g., <character_1>, <robot>)
+- Keep character names as provided (e.g., <male_1>, <police_1>)
 - Do not include clip numbers or scene labels in the summary
 - There might be conflict or misleading information provided, you should be able to handle it and provide a coherent summary.
 
@@ -366,6 +376,11 @@ You are a query parser for a knowledge graph system that stores video informatio
 - Allocate 10-45 based on query needs
 - Use for: "why" questions, dialogue content, causal reasoning
 
+**OCR**: Text extracted from video frames (signs, labels, remarks)
+- Format: `{"context": "sign in store", "content": "Open 24 Hours"}`
+- Allocate 5-15 when query asks about visible text, signs, labels, or written information.
+- Otherwise, `k_ocr` should be 0.
+
 ## YOUR TASK
 
 Given a query and budget `k=50`, output:
@@ -390,10 +405,10 @@ Given a query and budget `k=50`, output:
   - "where is X now?" → Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
   - "last time" / "last place" → Use triple `[X, "is at", "?", ...]` and prioritize edges with highest clip_id values.
   - "where should X be placed?" → Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]` to find placement instructions.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" → Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can character get X?" / "where did X get Y from?" → Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 - **Allocation for location queries**: Prioritize low-level edges (35-45) since they contain spatial information. Use conversations (5-10) only if placement instructions might be mentioned in dialogue.
 
-2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
+2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance, k_ocr}`:
    - Total must be ≤ 50
    - High-level: 5-10 max (limited availability)
    - Low-level: 30-45 for action queries
@@ -402,7 +417,11 @@ Given a query and budget `k=50`, output:
      - If the question is about character appearance, clothing, hairstyle, facial/body features, accessories:
        allocate `k_appearance` > 0 (typically 5-15).
      - Otherwise, `k_appearance` MUST be 0.
-   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance`
+   - OCR:
+     - If the question is about visible text, signs, labels, or written information:
+       allocate `k_ocr` > 0 (typically 5-15).
+     - Otherwise, `k_ocr` MUST be 0.
+   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance + k_ocr`
 
 3. **speaker_strict**: 
    - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
@@ -418,7 +437,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=10, k_low_level=10, k_conversations=30, k_appearance=0, total_k=50,
+    k_high_level=10, k_low_level=10, k_conversations=30, k_appearance=0, k_ocr=0, total_k=50,
     reasoning="Relationship query - use high-level for relationships, conversations for evidence"
   )
 )
@@ -429,7 +448,7 @@ ParseQueryOutput(
   spatial_constraint="kitchen",
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=5, k_low_level=38, k_conversations=7, k_appearance=0, total_k=50,
+    k_high_level=5, k_low_level=38, k_conversations=7, k_appearance=0, k_ocr=0, total_k=50,
     reasoning="Action query - prioritize low-level edges"
   )
 )
@@ -440,7 +459,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=["<Emily>", "<David>"],
   allocation=ParseQueryAllocation(
-    k_high_level=2, k_low_level=3, k_conversations=45, k_appearance=0, total_k=50,
+    k_high_level=2, k_low_level=3, k_conversations=45, k_appearance=0, k_ocr=0, total_k=50,
     reasoning="Dialogue query - prioritize conversations with specific speakers"
   )
 )
@@ -454,7 +473,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=2, k_low_level=40, k_conversations=8, k_appearance=0, total_k=50,
+    k_high_level=2, k_low_level=40, k_conversations=8, k_appearance=0, k_ocr=0, total_k=50,
     reasoning="Main triple targets usage by Lily; helper triple constrains items to dressing table"
   )
 )
@@ -465,8 +484,19 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=2, k_low_level=42, k_conversations=6, k_appearance=0, total_k=50,
+    k_high_level=2, k_low_level=42, k_conversations=6, k_appearance=0, k_ocr=0, total_k=50,
     reasoning="Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"
+  )
+)
+
+**Example 6**: "What does the sign in the store say?"
+ParseQueryOutput(
+  query_triples=[["sign", "says", "?", 0.9, 0.7, 0.3]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=2, k_low_level=10, k_conversations=3, k_appearance=0, k_ocr=35, total_k=50,
+    reasoning="OCR query - prioritize OCR information for visible text"
   )
 )
 
@@ -498,6 +528,11 @@ You are a query parser for a knowledge graph system that stores video informatio
 - Allocate 5-24 based on query needs
 - Use for: "why" questions, dialogue content, causal reasoning
 
+**OCR**: Text extracted from video frames (signs, labels, remarks)
+- Format: `{"context": "sign in store", "content": "Open 24 Hours"}`
+- Allocate 3-10 when query asks about visible text, signs, labels, or written information.
+- Otherwise, `k_ocr` should be 0.
+
 ## YOUR TASK
 
 Given a query and budget `k=30`, output:
@@ -522,10 +557,10 @@ Given a query and budget `k=30`, output:
   - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
   - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]` and prioritize edges with highest clip_id values.
   - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]` to find placement instructions.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can character get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]` to find source locations. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 - **Allocation for location queries**: Prioritize low-level edges (18-24) since they contain spatial information. Use conversations (3-6) only if placement instructions might be mentioned in dialogue.
 
-2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance}`:
+2. **Allocation** `{k_high_level, k_low_level, k_conversations, k_appearance, k_ocr}`:
    - Total must be <= 30
    - High-level: 5-10 max (limited availability)
    - Low-level: 15-24 for action queries
@@ -534,7 +569,11 @@ Given a query and budget `k=30`, output:
      - If the question is about character appearance, clothing, hairstyle, facial/body features, accessories:
        allocate `k_appearance` > 0 (typically 3-10).
      - Otherwise, `k_appearance` MUST be 0.
-   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance`
+   - OCR:
+     - If the question is about visible text, signs, labels, or written information:
+       allocate `k_ocr` > 0 (typically 3-10).
+     - Otherwise, `k_ocr` MUST be 0.
+   - `total_k` must equal: `k_high_level + k_low_level + k_conversations + k_appearance + k_ocr`
 
 3. **speaker_strict**:
    - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
@@ -550,7 +589,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=8, k_low_level=5, k_conversations=17, k_appearance=0, total_k=30,
+    k_high_level=8, k_low_level=5, k_conversations=17, k_appearance=0, k_ocr=0, total_k=30,
     reasoning="Relationship query - use high-level for relationships, conversations for evidence"
   )
 )
@@ -561,7 +600,7 @@ ParseQueryOutput(
   spatial_constraint="kitchen",
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, total_k=30,
+    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, k_ocr=0, total_k=30,
     reasoning="Action query - prioritize low-level edges"
   )
 )
@@ -572,7 +611,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=["<Emily>", "<David>"],
   allocation=ParseQueryAllocation(
-    k_high_level=5, k_low_level=2, k_conversations=23, k_appearance=0, total_k=30,
+    k_high_level=5, k_low_level=2, k_conversations=23, k_appearance=0, k_ocr=0, total_k=30,
     reasoning="Dialogue query - prioritize conversations with specific speakers"
   )
 )
@@ -586,7 +625,7 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=5, k_low_level=20, k_conversations=5, k_appearance=0, total_k=30,
+    k_high_level=5, k_low_level=20, k_conversations=5, k_appearance=0, k_ocr=0, total_k=30,
     reasoning="Main triple targets usage by Lily; helper triple constrains items to dressing table"
   )
 )
@@ -597,8 +636,19 @@ ParseQueryOutput(
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
-    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, total_k=30,
+    k_high_level=5, k_low_level=21, k_conversations=4, k_appearance=0, k_ocr=0, total_k=30,
     reasoning="Temporal-spatial query - 'now' means most recent location. Prioritize low-level edges with highest clip_id to find current state"
+  )
+)
+
+**Example 6**: "What does the sign in the store say?"
+ParseQueryOutput(
+  query_triples=[["sign", "says", "?", 0.9, 0.7, 0.3]],
+  spatial_constraint=None,
+  speaker_strict=None,
+  allocation=ParseQueryAllocation(
+    k_high_level=2, k_low_level=5, k_conversations=3, k_appearance=0, k_ocr=20, total_k=30,
+    reasoning="OCR query - prioritize OCR information for visible text"
   )
 )
 
@@ -633,7 +683,7 @@ Given a query, output:
   - "where is X now?" -> Use triple `[X, "is at", "?", ...]` with high weight on X.
   - "last time" / "last place" -> Use triple `[X, "is at", "?", ...]`.
   - "where should X be placed?" -> Use triple `[X, "should be placed at", "?", ...]` or `[X, "is placed at", "?", ...]`.
-- **Source location queries**: "where can robot get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]`. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
+- **Source location queries**: "where can character get X?" / "where did X get Y from?" -> Use triple `[X, "gets", "Y", ...]` or `[Y, "is in", "?", ...]`. Include a helper triple if needed: `[Y, "is from", "?", ...]`.
 
 2. **speaker_strict**:
    - Set to `["<Anna>", "<Susan>"]` when query asks about dialogue between specific speakers
@@ -675,8 +725,10 @@ Input format:
 1. **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
   Example: Anna is: health-conscious (80) means 80% confidence.
 2. **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
+  Applies to low-level actions, conversation messages, and OCR info.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
+3. **OCR Information**: Visible text from frames.
+  Example: [2] OCR: sign in store says "Open 24 Hours".
 
 Decision criteria: 
 1. Answer directly ([Answer]) when the current information provides a clear, complete answer.
@@ -705,14 +757,16 @@ Content: What happened before Alice left the room that caused her to leave?
 prompt_graph_video = """
 You are a reasoning system that evaluates whether information extracted from a knowledge graph is sufficient to answer a question.
 
-You will be provided with extracted knowledge from the video graph, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
+You will be provided with extracted knowledge from the video graph, including four components: high-level information (character attributes/relationships), low-level information (actions/states), conversations, and OCR information (visible text).
 
 Input format: 
 - **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
   Example: Anna is: health-conscious (80) means 80% confidence.
 - **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
+  Applies to low-level actions, conversation messages, and OCR info.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
+- **OCR Information**: Visible text from frames.
+  Example: [2] OCR: sign in store says "Open 24 Hours".
 
 Output should include: 
 1. answer: True or False
@@ -805,7 +859,7 @@ GraphVideoOutput(
 )
 
 Question: How many times was the air-conditioning remote used?
-Extracted information: High-level: (no count information) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
+Extracted information: High-level: (no count information) Low-level: [8] <male_1> uses air-conditioning remote. (meeting room) [11] <male_1> uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
 GraphVideoOutput(
   answer=False,
@@ -818,14 +872,16 @@ GraphVideoOutput(
 prompt_no_video_rewatch = """
 You are a reasoning system that answers the question based on the searched information from a video.
 
-You will be provided with the extracted knowledge from the video graph, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
+You will be provided with the extracted knowledge from the video graph, including four components: high-level information (character attributes/relationships), low-level information (actions/states), conversations, and OCR information (visible text).
 
 Input format: 
 - **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
   Example: Anna is: health-conscious (80) means 80% confidence.
 - **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
+  Applies to low-level actions, conversation messages, and OCR info.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
+- **OCR Information**: Visible text from frames.
+  Example: [2] OCR: sign in store says "Open 24 Hours".
 
 Output: Provide a concise, direct answer in ONE SENTENCE. Be brief and to the point. Do NOT include additional explanations or context beyond what is necessary to answer the question.
 Answers like "I don't know" or "The information is not sufficient to answer the question" are NOT allowed. You can guess the answer based on the information provided.
@@ -935,7 +991,7 @@ GraphVideoOutput(
 )
 
 Question: How many times was the air-conditioning remote used?
-Extracted information: High-level: (not available) Low-level: [8] Robot uses air-conditioning remote. (meeting room) [11] Robot uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
+Extracted information: High-level: (not available) Low-level: [8] <male_1> uses air-conditioning remote. (meeting room) [11] <male_1> uses air-conditioning remote. (meeting room) Conversations: (no relevant conversations)
 Output:
 GraphVideoOutput(
   answer=False,
@@ -1042,7 +1098,7 @@ VideoOutputFormat(
 Question: How many times was the air-conditioning remote used?
 Current clip ID: 11
 Previous summaries: Clip 8: The air-conditioning remote was used once. Clip 9: No remote usage. Clip 10: No remote usage.
-Video shows: Robot uses the air-conditioning remote once
+Video shows: <male_1> uses the air-conditioning remote once
 Output:
 VideoOutputFormat(
   answer=False,
@@ -1054,14 +1110,16 @@ VideoOutputFormat(
 prompt_semantic_answer_only = """
 You are a reasoning system that answers questions based on information extracted.
 
-You will be provided with extracted text knowledge from a video, including three components: high-level information (character attributes/relationships), low-level information (actions/states), and conversations.
+You will be provided with extracted text knowledge from a video, including four components: high-level information (character attributes/relationships), low-level information (actions/states), conversations, and OCR information (visible text).
 
 Input format: 
 - **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
   Example: Anna is: health-conscious (80) means 80% confidence.
 - **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, clip 3 = 60-90s, etc.
-  Applies to both low-level actions and conversation messages.
+  Applies to low-level actions, conversation messages, and OCR info.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
+- **OCR Information**: Visible text from frames.
+  Example: [2] OCR: sign in store says "Open 24 Hours".
 
 Your task: Answer the question directly based on the provided information. You MUST provide an answer - never say that information is missing, unavailable, or not specified. 
 

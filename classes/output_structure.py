@@ -5,11 +5,16 @@ class Appearance(BaseModel):
     name: str
     appearance: str
 
+class OCRInfo(BaseModel):
+    context: str
+    content: str
+
 class EpisodicFormat(BaseModel):
     behaviors: list[str]
     conversation: list[list[str]]
     characters_appearance: list[Appearance]
-    scene: str
+    scene: str | None
+    ocr: list[OCRInfo]
 
 class ConversationSummary(BaseModel):
     summary: str
@@ -22,6 +27,7 @@ class ParseQueryAllocation(BaseModel):
     k_low_level: int
     k_conversations: int
     k_appearance: int
+    k_ocr: int
     total_k: int
     reasoning: str
 

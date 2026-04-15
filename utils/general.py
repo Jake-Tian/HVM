@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import re
 from pathlib import Path
 from utils.llm import get_embedding
 
@@ -84,26 +85,23 @@ def merge_character_appearances(characters_appearance, appearance_dict, similari
         best_match = None
         # new character
         for char_name, char_appearance in appearance_dict.items():
-            if char_name.startswith("<character_"):
+            # Check if it's an unknown placeholder format: <name_number> (e.g., <male_1>, <police_1>)
+            is_placeholder = bool(re.match(r"^<\w+_\d+>$", char_name))
+            if is_placeholder:
                 similarity = cosine_similarity(embedding, char_appearance[1])
                 if similarity > best_similarity:
                     best_similarity = similarity
                     best_match = char_name
 
         if best_similarity > similarity_threshold:
-            # <character_X> → <character_Y>
-            if character.name.startswith("<character_"):
-                # Keep the smaller character_X key in appearance_dict.
-                current_idx = int(character.name[len("<character_"):-1])
-                best_idx = int(best_match[len("<character_"):-1])
-                if current_idx < best_idx:
-                    appearance_dict.pop(best_match, None)
-                    appearance_dict[character.name] = [character.appearance, embedding]
-                    equivalence_list.append([best_match, character.name])
-                else:
-                    appearance_dict[best_match] = [character.appearance, embedding]
-                    equivalence_list.append([character.name, best_match])
-            # named character → <character_X>
+            # placeholder → placeholder
+            is_char_placeholder = bool(re.match(r"^<\w+_\d+>$", character.name))
+            if is_char_placeholder:
+                # Merge logic: if both are placeholders, we might need a way to decide which one to keep.
+                # For now, let's keep the best match from the dictionary.
+                appearance_dict[best_match] = [character.appearance, embedding]
+                equivalence_list.append([character.name, best_match])
+            # named character → placeholder
             else:
                 appearance_dict.pop(best_match, None)
                 appearance_dict[character.name] = [character.appearance, embedding]

@@ -29,7 +29,7 @@ def process_full_video(video_name):
     if not image_folders:
         raise ValueError(f"No frame clip folders found in {frames_dir}")
 
-    # image_folders = image_folders[:1] # Uncomment for quick debugging
+    # image_folders = image_folders[:2] # Uncomment for quick debugging
     
     previous_conversation = False
     appearance_dict = dict()    # character name → [appearance description, embedding]
@@ -57,11 +57,18 @@ def process_full_video(video_name):
             messages = generate_messages(current_images, prompt)
             try:
                 response, tokens = get_response(messages, EpisodicFormat)
+                print(response)
                 token_summaries["mllm"] += int(tokens or 0)
             except Exception as e:
                 print(f"MLLM call failed, retrying... Error: {e}")
-                response, tokens = get_response(messages, EpisodicFormat)
-                token_summaries["mllm"] += int(tokens or 0)
+                try: 
+                    response, tokens = get_response(messages)
+                    print(response)
+                    token_summaries["mllm"] += int(tokens or 0)
+                except Exception as e:
+                    print(f"MLLM call failed, retrying... Error: {e}")
+                    traceback.print_exc()
+                    continue
 
             if token_summaries["mllm"] > 7000000:
                 print(f"MLLM token limit reached. Stop processing this video.")
@@ -72,11 +79,15 @@ def process_full_video(video_name):
                 behaviors = response.behaviors
                 conversation = response.conversation
                 characters_appearance = response.characters_appearance
-                scene = response.scene
+                scene = getattr(response, 'scene', None)
+                ocr = response.ocr
             except Exception as e:
                 print(f"Error parsing response: {e}. Continuing to next clip...")
                 traceback.print_exc()
                 continue
+
+            if ocr:
+                graph.add_ocr_info(clip_id, ocr)
 
             if behaviors and len(behaviors) > 0 and behaviors[0].startswith("Equivalence:"):
                 equivalence_parts = behaviors[0].split(":")[1].split(",")
@@ -158,6 +169,7 @@ def process_full_video(video_name):
                 "conversation": conversation,
                 "characters_appearance": str(characters_appearance),
                 "scene": scene,
+                "ocr": [ocr_item.model_dump() for ocr_item in ocr] if ocr else [],
                 "triples": triples
             }
 
@@ -221,6 +233,7 @@ def process_full_video(video_name):
         try: 
             graph.node_embedding_insertion()
             graph.insert_high_level_and_appearance_embeddings()
+            graph.ocr_embedding_insertion()
         except Exception as e:
             print(f"✗ Error inserting embeddings: {e}")
             traceback.print_exc()

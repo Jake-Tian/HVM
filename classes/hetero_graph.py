@@ -4,6 +4,7 @@ import numpy as np
 from .node_class import CharacterNode, ObjectNode
 from .edge_class import Edge
 from .conversation import Conversation
+from .ocr import OCR
 from .output_structure import ConversationSummary
 from collections import defaultdict
 from utils.prompts import prompt_character_summary, prompt_character_relationships, prompt_conversation_summary
@@ -17,15 +18,13 @@ class HeteroGraph:
         self.characters = {}   # name → CharacterNode object
         self.objects = {}   # name → ObjectNode object
         self.conversations = {}   # id → Conversation object
+        self.ocr_info = []   # List of OCR objects
         self.edges = {}   # id → Edge object
         self.current_conversation_id = None  # Track the most recent conversation ID
 
         # adjacency lists for O(1) search
         self.adjacency_list_out = defaultdict(list)  # node → list of edge IDs (outgoing edges)
         self.adjacency_list_in = defaultdict(list)   # node → list of edge IDs (incoming edges)
-
-        robot = CharacterNode("<robot>")
-        self.characters[robot.name] = robot
 
 
     # --------------------------------------------------------
@@ -53,7 +52,7 @@ class HeteroGraph:
         Rename/merge a placeholder character and update all references throughout the graph.
 
         Behavior:
-        1. old_name must be an existing placeholder in <character_X> format.
+        1. old_name must be an existing placeholder (e.g., <male_1>, <female_1>, <job_1>).
         2. new_name can be provided either as "<name>" or "name" (stored as "<name>").
         3. If new_name exists, merge old_name into new_name by redirecting all connected edges.
         4. If new_name does not exist, create a new CharacterNode and redirect edges.
@@ -74,9 +73,9 @@ class HeteroGraph:
         if old_name not in self.characters:
             return False
 
-        # Validate that old_name is in <character_X> format
-        if not re.match(r'^<character_\d+>$', old_name):
-            return False  # Only <character_X> format can be renamed
+        # Validate that old_name is an unknown placeholder format: <name_number>
+        if not re.match(r"^<\w+_\d+>$", old_name):
+            return False  # Only placeholder formats can be renamed
 
         # No-op rename
         if old_name == new_name_stored:
@@ -254,6 +253,98 @@ class HeteroGraph:
 
 
     # --------------------------------------------------------
+    # OCR API
+    # --------------------------------------------------------
+    def add_ocr_info(self, clip_id, ocr_list):
+        """
+        Add OCR information to the graph.
+        
+        Args:
+            clip_id (int): ID of the current clip
+            ocr_list (list): List of OCRInfo objects (from EpisodicFormat)
+        """
+        if not ocr_list:
+            return
+            
+        for ocr_item in ocr_list:
+            # ocr_item is an OCRInfo object with context and content attributes
+            ocr_obj = OCR(clip_id=clip_id, context=ocr_item.context, content=ocr_item.content)
+            self.ocr_info.append(ocr_obj)
+
+
+    def ocr_embedding_insertion(self):
+        """
+        Generate embeddings for all OCR entries in batch.
+        The embedding is generated for the concatenation of context and content.
+        """
+        if not self.ocr_info:
+            print("No OCR information found for embedding insertion")
+            return
+            
+        ocr_texts = []
+        ocr_to_update = []
+        
+        for ocr in self.ocr_info:
+            if ocr.embedding is None:
+                # Concat context and content for better searchability
+                text = f"{ocr.context}: {ocr.content}"
+                ocr_texts.append(text)
+                ocr_to_update.append(ocr)
+                
+        if not ocr_texts:
+            print("All OCR entries already have embeddings")
+            return
+            
+        try:
+            embeddings = get_multiple_embeddings(ocr_texts)
+            for ocr, embedding in zip(ocr_to_update, embeddings):
+                ocr.embedding = embedding
+            print(f"{len(embeddings)} OCR embeddings inserted")
+        except Exception as e:
+            print(f"Warning: batch OCR embedding insertion failed: {e}")
+            # Fallback to single embedding generation
+            for ocr, text in zip(ocr_to_update, ocr_texts):
+                try:
+                    ocr.embedding = get_embedding(text)
+                except Exception as e2:
+                    print(f"Warning: failed to embed OCR content '{text}': {e2}")
+
+
+    def search_ocr_info(self, query, k):
+        """
+        Search for top-k OCR entries using embedding-based similarity.
+        
+        Args:
+            query (str): Natural language query.
+            k (int): Number of top results to return.
+            
+        Returns:
+            list: List of OCR objects sorted by similarity.
+        """
+        if not query or k <= 0 or not self.ocr_info:
+            return []
+            
+        try:
+            query_embedding = get_embedding(query)
+        except Exception as e:
+            print(f"Warning: Failed to get query embedding for OCR search: {e}")
+            return []
+            
+        scored_ocr = []
+        for ocr in self.ocr_info:
+            if ocr.embedding is not None:
+                similarity = self._cosine_similarity(query_embedding, ocr.embedding)
+                scored_ocr.append((similarity, ocr))
+            else:
+                # Fallback to keyword match if embedding is missing
+                if query.lower() in ocr.content.lower() or query.lower() in ocr.context.lower():
+                    scored_ocr.append((0.5, ocr))
+                    
+        scored_ocr.sort(key=lambda x: x[0], reverse=True)
+        return [ocr for score, ocr in scored_ocr[:k]]
+
+
+    # --------------------------------------------------------
     # Edge API
     # --------------------------------------------------------
     def _find_existing_high_level_edge(self, source, content, target, clip_id=0, scene=None):
@@ -387,10 +478,10 @@ class HeteroGraph:
     def _match_and_merge_character(self, char_name, character_appearance, similarity_threshold=0.85):
         """
         Match a new character with existing characters based on appearance similarity.
-        If a match is found with a <character_X> (not named character), merge them.
+        If a match is found with an unknown character placeholder (e.g., <male_1>), merge them.
         
         Args:
-            char_name: Character name to match (e.g., "<character_3>")
+            char_name: Character name to match (e.g., "<male_1>")
             character_appearance: Dictionary mapping character names to appearance descriptions
             similarity_threshold: Minimum similarity to consider a match (default: 0.85)
         
@@ -409,13 +500,13 @@ class HeteroGraph:
             print(f"Warning: Failed to get embedding for character appearance: {e}")
             return None
         
-        # Compare with all existing characters (only <character_X> can be removed)
+        # Compare with all existing characters (only unknown placeholders can be removed/merged)
         best_match = None
         best_similarity = 0.0
         
         for existing_char_name in self.characters:
-            # Only consider <character_X> for removal (not named characters, not robot)
-            if not existing_char_name.startswith("<character_") or existing_char_name == "<robot>":
+            # Check if it's an unknown placeholder format: <name_number>
+            if not re.match(r"^<\w+_\d+>$", existing_char_name):
                 continue
             
             # Get appearance for existing character

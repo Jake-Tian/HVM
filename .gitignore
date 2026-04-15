@@ -7,7 +7,7 @@ __pycache__/
 
 # Data file
 data/*
-!data/robot.json
+!data/web_100.json
 
 # Visualization output
 visualization/

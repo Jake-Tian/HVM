@@ -185,7 +185,7 @@ def main():
     else:
         available_videos = sys.argv[1:]
 
-    with open(f"data/robot.json", "r", encoding="utf-8") as f:
+    with open(f"data/web_100.json", "r", encoding="utf-8") as f:
         questions_data = json.load(f)
 
     for video_name in available_videos:
@@ -236,28 +236,28 @@ def main():
                 traceback.print_exc()
                 result_no_allocation = str(e)
 
-            # try:
-            #     result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
-            #     evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
-            #     result_no_video_rewatch["evaluate_correct"] = evaluate_correct
-            # except Exception as e:
-            #     print(f"Error processing question {question_id}: {e}")
-            #     traceback.print_exc()
-            #     result_no_video_rewatch = str(e)
+            try:
+                result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
+                evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
+                result_no_video_rewatch["evaluate_correct"] = evaluate_correct
+            except Exception as e:
+                print(f"Error processing question {question_id}: {e}")
+                traceback.print_exc()
+                result_no_video_rewatch = str(e)
 
-            # reasoning_results[question_id] = {
-            #     "question": question,
-            #     "ground_truth_answer": answer,
-            #         # Backward-compatible main payload key.
-            #         "reasoning": main_result,
-            #         "ablations": {
-            #             "k30": result_k30,
-            #             "no_allocation": result_no_allocation,
-            #             "no_video_rewatch": result_no_video_rewatch,
-            #         },
-            #     "timestamp": video_question.get("timestamp"),
-            #     "type": video_question.get("type"),
-            # }
+            reasoning_results[question_id] = {
+                "question": question,
+                "ground_truth_answer": answer,
+                    # Backward-compatible main payload key.
+                "reasoning": main_result,
+                "ablations": {
+                    "k30": result_k30,
+                    "no_allocation": result_no_allocation,
+                    "no_video_rewatch": result_no_video_rewatch,
+                },
+            "timestamp": video_question.get("timestamp"),
+            "type": video_question.get("type"),
+            }
 
         with open(output_json_path, "w") as f:
             json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
