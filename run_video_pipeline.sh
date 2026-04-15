@@ -73,11 +73,11 @@ process_one_video() {
 if [[ "$#" -gt 0 ]]; then
   VIDEOS=("$@")
 else
-  if [[ ! -f "video_list.txt" ]]; then
-    echo "video_list.txt not found. Pass video names as arguments."
+  if [[ ! -f "first_100_videos.txt" ]]; then
+    echo "first_100_videos.txt not found. Pass video names as arguments."
     exit 1
   fi
-  mapfile -t VIDEOS < "video_list.txt"
+  mapfile -t VIDEOS < "first_100_videos.txt"
 fi
 
 echo "Processing ${#VIDEOS[@]} videos with max ${MAX_PARALLEL_JOBS} parallel jobs"
