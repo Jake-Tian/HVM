@@ -13,6 +13,7 @@ data/*
 visualization/
 *.mp4
 *.pkl
+*.html
 
 # Images
 *.jpg
@@ -46,3 +47,4 @@ Thumbs.db
 # local scripts
 test.sh
 test.log
+reasoning_analysis.md

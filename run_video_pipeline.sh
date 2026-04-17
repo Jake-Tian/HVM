@@ -1,3 +1,6 @@
+# Example usage:
+# bash run_video_pipeline.sh video1
+
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -39,8 +42,8 @@ process_one_video() {
   echo "[$(date +%H:%M:%S)] Processing video: ${video}"
   echo "============================================================"
 
-  # Step 1: Download frames from HuggingFace
-  if ! python3 preprocessing/download_hf_frames.py "$video"; then
+    # Step 1: Download frames from HuggingFace
+    if ! python3 preprocessing/download_hf_frames.py "$video"; then
     echo "✗ [${video}] Frame download failed"
     cleanup_video "$video"
     return 1

@@ -1,154 +1,65 @@
-from concurrent.futures.process import _ResultItem
 import pickle
 import json
 import glob
 import sys
 import traceback
 from pathlib import Path
+
+from langchain_core.messages import HumanMessage, AIMessage
+
 from utils.llm import generate_text_response
-from utils.mllm_gpt import generate_messages, get_response
-from utils.prompts import prompt_parse_query, prompt_graph_video, prompt_video_answer, prompt_video_answer_final, prompt_agent_verify_answer_referencing
-from classes.output_structure import ParseQueryOutput, GraphOutputFormat, VideoOutputFormat
-from reason_ablation import reason_k30, reason_no_allocation
-from utils.search import search_with_parse
+from utils.prompts import prompt_agent_verify_answer_referencing
+from utils.langgraph_helper import build_agent
 from utils.general import find_pkl_files, Tee
 
-
 def reason(graph, video_name, question):
-
-    result = {
-        'question': question,
-        'parse_query_output': None,
-        'graph_search_results': None,
-        'decision_response': None,
-        'video_answer_outputs': [],
-        'token_summaries': {"parse_query": 0, "graph_answer": 0, "video_answer": 0}, 
-        'final_answer': None,
-    }
-    
     print("================================================")
     print("Question: ", question)
+
+    app = build_agent(graph, video_name)
+
+    initial_state = {
+        "question": question,
+        "messages": [HumanMessage(content=question)],
+        "findings": [],
+        "clip_history": [],
+        "budget": 5,
+        "total_tokens": 0
+    }
     
-    #--------------------------------
-    # Part 1: Search the graph
-    #--------------------------------
-    print("\n[Step 1] Searching the graph...")
-    try:
-        # Parse query using LLM
-        parse_query_response, tokens = generate_text_response(prompt_parse_query + "\n" + question, ParseQueryOutput)
-        result['parse_query_output'] = str(parse_query_response)
-        result['token_summaries']['parse_query'] = tokens
-        print("Parse Query Output:")
-        print(parse_query_response)
-        
-        # Search the graph with parsed query
-        graph_search_results = search_with_parse(question, graph, parse_query_response)
-        result['graph_search_results'] = graph_search_results
-        
-    except Exception as e:
-        raise Exception(f"Error searching graph: {e}")
+    result_state = app.invoke(initial_state)
     
-    #--------------------------------
-    # Part 2: Evaluate searched graph answer
-    #--------------------------------
-    print("\n[Step 2] Evaluating searched answer...")
-    prompt = prompt_graph_video + "\nExtracted knowledge from graph:\n" + result['graph_search_results'] + "\nQuestion: " + question
-    try:
-        decision_response, tokens = generate_text_response(prompt, GraphOutputFormat)
-        result['decision_response'] = str(decision_response)
-        result['token_summaries']['graph_answer'] = tokens
-        print("Decision response: \n", decision_response)
-    except Exception as e:
-        raise Exception(f"Error evaluating searched answer: {e}")
+    final_ans = ""
+    for msg in reversed(result_state["messages"]):
+        if isinstance(msg, AIMessage) and not msg.tool_calls:
+            final_ans = msg.content
+            break
+            
+    total_tokens = result_state.get("total_tokens", 0)
+            
+    rounds = []
+    for msg in result_state["messages"]:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                rounds.append({
+                    "tool": tc["name"],
+                    "args": tc["args"]
+                })
+                
+    if not final_ans:
+        final_ans = "Could not determine the answer."
+                
+    print("Final Answer:", final_ans)
+    print(f"Total Tokens: {total_tokens}")
     
-    # If action is Answer, return immediately
-    answer_or_search = decision_response.answer
-    content = decision_response.content
-    summary = decision_response.summary
-
-    if answer_or_search: 
-        result['final_answer'] = content
-        return result
-    
-    #--------------------------------
-    # Part 3: Watch the video clips
-    #--------------------------------
-    # Extract and validate clip IDs from decision content.
-    if not isinstance(content, list):
-        content = [content]
-    clip_ids = []
-    for item in content:
-        try:
-            clip_ids.append(int(item))
-        except Exception:
-            print(f"Warning: Ignoring invalid clip id from decision output: {item}")
-    if not clip_ids:
-        raise Exception(f"No valid clip ids returned for video search. Raw content: {content}")
-    if len(clip_ids) > 5:
-        clip_ids = clip_ids[:5]
-
-    print(f"\n[Step 3] Watching video clips: {clip_ids}")
-    summary_dict = dict()
-
-    for clip_id in clip_ids[:-1]:
-        print(f"Processing clip {clip_id}...")
-
-        prompt = prompt_video_answer + "\nQuestion: " + question + "\nCurrent clip ID: " + str(clip_id) + "\nPrevious summaries:\n"
-        if summary:
-            prompt += str(summary)
-        for key, value in summary_dict.items():
-            prompt += "\n" + f"Clip {key}: {value}"
-
-        frames_dir = Path(f"data/frames/{video_name}") / str(clip_id)
-        images = sorted(glob.glob(str(frames_dir / "*.jpg")), key=lambda x: int(Path(x).stem))
-
-        try:
-            messages = generate_messages(images, prompt)
-            response, tokens = get_response(messages, VideoOutputFormat)
-            answer_or_search = response.answer
-            clip_summary = response.content
-            result['token_summaries']['video_answer'] += int(tokens or 0)
-        except Exception as e:
-            raise Exception(f"Error processing clip {clip_id}: {e}")
-
-        result['video_answer_outputs'].append(str(response))
-
-        if answer_or_search: 
-            result['final_answer'] = clip_summary
-            print("Final answer: \n", result['final_answer'])
-            return result
-        else:
-            summary_dict[clip_id] = clip_summary
-
-    # Watch last clip
-    clip_id = clip_ids[-1]
-    print(f"Processing last clip {clip_id}...")
-    prompt = prompt_video_answer_final + "\nQuestion: " + question + "\nCurrent clip ID: " + str(clip_id) + "\nPrevious summaries:\n"
-    if summary:
-        prompt += str(summary)
-    for key, value in summary_dict.items():
-        prompt += "\n" + f"Clip {key}: {value}"
-    frames_dir = Path(f"data/frames/{video_name}") / str(clip_id)
-    images = sorted(glob.glob(str(frames_dir / "*.jpg")), key=lambda x: int(Path(x).stem))
-
-    try:
-        messages = generate_messages(images, prompt)
-        response, tokens = get_response(messages)
-        if response is None or (isinstance(response, str) and not response.strip()):
-            # Fallback: use last summary or placeholder so final_answer is never null
-            response = (
-                summary_dict[clip_ids[-2]] if len(clip_ids) >= 2 and clip_ids[-2] in summary_dict
-                else "No answer could be generated from the video."
-            )
-        result['final_answer'] = response
-    except Exception as e:
-        raise Exception(f"Error processing last clip {clip_id}: {e}")
-    
-    print("Final Answer:")
-    print(result['final_answer'])
-
+    result = {
+        'question': question,
+        'rounds': rounds,
+        'final_answer': final_ans,
+        'token_summaries': {"total": total_tokens},
+        'evaluate_correct': False
+    }
     return result
-
 
 def evaluate_answer(question, ground_truth_answer, predicted_answer):
     prompt = prompt_agent_verify_answer_referencing.format(
@@ -158,28 +69,24 @@ def evaluate_answer(question, ground_truth_answer, predicted_answer):
     )
     
     try: 
-        response, _ = generate_text_response(prompt)
+        response, tokens = generate_text_response(prompt)
         response = response.strip().upper()
         if response.startswith("YES"):
-            return True
+            return True, (tokens or 0)
         elif response.startswith("NO"):
-            return False
+            return False, (tokens or 0)
         else:
-            # If response is ambiguous, default to False
             print(f"Warning: Unexpected evaluator response: {response}. Defaulting to False.")
-            return False
+            return False, (tokens or 0)
     except Exception as e:
         print(f"Error evaluating answer: {e}. Defaulting to False.")
-        return False
-
+        return False, 0
 
 def main():
-
     original_stdout = sys.stdout
     log_file = open("log.txt", "w", encoding="utf-8")
     sys.stdout = Tee(log_file)
 
-    # If no video names are provided, process all available graph files.
     if len(sys.argv) < 2:
         available_videos = sorted(find_pkl_files())
     else:
@@ -211,52 +118,36 @@ def main():
 
             try:
                 main_result = reason(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, main_result["final_answer"])
-                main_result["evaluate_correct"] = evaluate_correct
+                if isinstance(main_result, dict):
+                    evaluate_correct, eval_tokens = evaluate_answer(question, answer, main_result.get("final_answer", ""))
+                    main_result["evaluate_correct"] = evaluate_correct
+                    if "token_summaries" not in main_result:
+                        main_result["token_summaries"] = {"total": 0}
+                    main_result["token_summaries"]["total"] += eval_tokens
+                else:
+                    # In case reason() returned a string error
+                    main_result = {
+                        "error": str(main_result),
+                        "evaluate_correct": False,
+                        "final_answer": "Error occurred during reasoning.",
+                        "token_summaries": {"total": 0}
+                    }
             except Exception as e:
                 print(f"Error processing question {question_id}: {e}")
                 traceback.print_exc()
-                main_result = str(e)
-
-            try:
-                result_k30 = reason_k30(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_k30["final_answer"])
-                result_k30["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_k30 = str(e)
-
-            try:
-                result_no_allocation = reason_no_allocation(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_no_allocation["final_answer"])
-                result_no_allocation["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_no_allocation = str(e)
-
-            try:
-                result_no_video_rewatch = reason_no_video_rewatch(graph, video_name, question)
-                evaluate_correct = evaluate_answer(question, answer, result_no_video_rewatch["final_answer"])
-                result_no_video_rewatch["evaluate_correct"] = evaluate_correct
-            except Exception as e:
-                print(f"Error processing question {question_id}: {e}")
-                traceback.print_exc()
-                result_no_video_rewatch = str(e)
+                main_result = {
+                    "error": str(e),
+                    "evaluate_correct": False,
+                    "final_answer": "Error occurred during reasoning.",
+                    "token_summaries": {"total": 0}
+                }
 
             reasoning_results[question_id] = {
                 "question": question,
                 "ground_truth_answer": answer,
-                    # Backward-compatible main payload key.
                 "reasoning": main_result,
-                "ablations": {
-                    "k30": result_k30,
-                    "no_allocation": result_no_allocation,
-                    "no_video_rewatch": result_no_video_rewatch,
-                },
-            "timestamp": video_question.get("timestamp"),
-            "type": video_question.get("type"),
+                "timestamp": video_question.get("timestamp"),
+                "type": video_question.get("type"),
             }
 
         with open(output_json_path, "w") as f:

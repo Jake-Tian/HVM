@@ -40,6 +40,7 @@ def search_with_parse(query, graph, parse_query_response):
         k_appearance = parse_query_response.allocation.k_appearance
         k_low_level = parse_query_response.allocation.k_low_level
         k_conversations = parse_query_response.allocation.k_conversations
+        k_ocr = getattr(parse_query_response.allocation, "k_ocr", 0)
     # Backward compatibility for dict payloads
     elif isinstance(parse_query_response, dict):
         triple = parse_query_response.get("query_triple")
@@ -75,6 +76,7 @@ def search_with_parse(query, graph, parse_query_response):
         k_appearance = allocation.get("k_appearance", 0)
         k_low_level = allocation.get("k_low_level", 10)
         k_conversations = allocation.get("k_conversations", 10)
+        k_ocr = allocation.get("k_ocr", 0)
     else:
         raise TypeError(
             "parse_query_response must be ParseQueryOutput, dict, or tuple(parsed, tokens). "
@@ -103,6 +105,12 @@ def search_with_parse(query, graph, parse_query_response):
             speaker_strict
         )
         print("Conversations searched: ", len(conversation_results))
+
+        # Search OCR
+        ocr_results = []
+        if k_ocr > 0:
+            ocr_results = graph.search_ocr_info(query, k_ocr)
+            print("OCR searched: ", len(ocr_results))
         
     except Exception as e:
         raise Exception(f"Error searching graph: {e}")
@@ -140,6 +148,17 @@ def search_with_parse(query, graph, parse_query_response):
         if conversation_str:
             result_sections.append("**Conversations: **\n")
             result_sections.append(conversation_str)
+            result_sections.append("")
+
+    # Format OCR
+    if ocr_results:
+        ocr_lines = []
+        for ocr in ocr_results:
+            ocr_lines.append(f"[{ocr.clip_id}] OCR ({ocr.context}): {ocr.content}")
+        if ocr_lines:
+            result_sections.append("**OCR Information: **\n")
+            result_sections.append("\n".join(ocr_lines))
+            result_sections.append("")
     
     # Combine all sections
     graph_search_results = "\n".join(result_sections)
