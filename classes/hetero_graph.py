@@ -7,8 +7,10 @@ from .conversation import Conversation
 from .output_structure import ConversationSummary
 from collections import defaultdict
 from utils.prompts import prompt_character_summary, prompt_character_relationships, prompt_conversation_summary
-from utils.llm import generate_text_response, get_embedding, get_multiple_embeddings
+from utils.llm_gpt import generate_text_response
+from utils.embedding import get_embedding, get_multiple_embeddings
 from utils.general import strip_code_fences
+from utils.token_usage import empty_usage, merge_usage, usage_total
 
 
 class HeteroGraph:
@@ -20,9 +22,15 @@ class HeteroGraph:
         self.edges = {}   # id → Edge object
         self.current_conversation_id = None  # Track the most recent conversation ID
 
-        # adjacency lists for O(1) search
+        # Adjacency lists support constant-time lookup.
         self.adjacency_list_out = defaultdict(list)  # node → list of edge IDs (outgoing edges)
         self.adjacency_list_in = defaultdict(list)   # node → list of edge IDs (incoming edges)
+
+        # Track evidence already consumed by incremental abstraction.
+        self._char_consumed_edges = defaultdict(set)   # char name → set[edge_id]
+        self._char_last_degree = defaultdict(int)     # char name → low-level degree at last summary
+        self._pair_consumed_edges = defaultdict(set)  # (c1, c2) → set[edge_id]
+        self._pair_last_degree = defaultdict(int)     # (c1, c2) → shared low-level count at last summary
 
         robot = CharacterNode("<robot>")
         self.characters[robot.name] = robot
@@ -32,11 +40,9 @@ class HeteroGraph:
     # Node API
     # --------------------------------------------------------
     def add_character(self, name):
-        # Ensure name has angle brackets
         if not name.startswith("<") or not name.endswith(">"):
             name = f"<{name}>"
         
-        # For other characters, check if already exists
         if name in self.characters:
             return name
         
@@ -62,36 +68,29 @@ class HeteroGraph:
         Returns:
             bool: True if successful, False for invalid/missing old_name.
         """
-        # Ensure old_name has angle brackets
         if not old_name.startswith("<") or not old_name.endswith(">"):
             old_name = f"<{old_name}>"
 
-        # Remove angle brackets from new_name if present, then add them for storage
         new_name_plain = new_name.strip("<>")
         new_name_stored = f"<{new_name_plain}>"
 
-        # Check if old character exists
         if old_name not in self.characters:
             return False
 
-        # Validate that old_name is in <character_X> format
         if not re.match(r'^<character_\d+>$', old_name):
             return False  # Only <character_X> format can be renamed
 
-        # No-op rename
         if old_name == new_name_stored:
             return True
 
         old_character = self.characters[old_name]
 
-        # Ensure destination node exists.
         if new_name_stored not in self.characters:
             self.characters[new_name_stored] = CharacterNode(
                 new_name_stored,
                 embedding=getattr(old_character, "embedding", None),
             )
 
-        # Update edges where this character appears as source or target.
         all_edge_ids = set(self.adjacency_list_out.get(old_name, [])) | set(self.adjacency_list_in.get(old_name, []))
 
         for edge_id in all_edge_ids:
@@ -103,7 +102,6 @@ class HeteroGraph:
             if edge.target == old_name:
                 edge.target = new_name_stored
 
-        # Merge adjacency lists (keep unique edge IDs).
         old_out = self.adjacency_list_out.pop(old_name, [])
         old_in = self.adjacency_list_in.pop(old_name, [])
         self.adjacency_list_out[new_name_stored] = list(
@@ -113,21 +111,17 @@ class HeteroGraph:
             set(self.adjacency_list_in.get(new_name_stored, [])) | set(old_in)
         )
 
-        # Update conversation speakers/messages.
         for conversation in self.conversations.values():
             if conversation is None:
                 continue
-            # Update message speaker field: [speaker, content, clip_id, embedding]
             for msg in conversation.messages:
                 if isinstance(msg, list) and len(msg) >= 1 and msg[0] == old_name:
                     msg[0] = new_name_stored
-            # Keep speakers set in sync
             if hasattr(conversation, "speakers") and isinstance(conversation.speakers, set):
                 if old_name in conversation.speakers:
                     conversation.speakers.discard(old_name)
                     conversation.speakers.add(new_name_stored)
 
-        # Remove old character node after rewiring.
         del self.characters[old_name]
 
         print(f"Renamed character: {old_name} -> {new_name_stored}")
@@ -140,10 +134,8 @@ class HeteroGraph:
         """
         degrees = {}
         
-        # Get all nodes that appear in either adjacency list
         all_nodes = set(self.adjacency_list_out.keys()) | set(self.adjacency_list_in.keys())
         
-        # Calculate degree for each node (outgoing + incoming)
         for node in all_nodes:
             out_degree = len(self.adjacency_list_out[node])
             in_degree = len(self.adjacency_list_in[node])
@@ -161,13 +153,10 @@ class HeteroGraph:
         
         node_str = str(node_str).strip()
         
-        # Check if it's a character node (surrounded by angle brackets)
         if node_str.startswith("<") and node_str.endswith(">"):
-            # Keep the angle brackets for consistency with storage
             character_name = node_str  # Keep angle brackets
             return (True, character_name)
         
-        # It's an object node - just return the name as-is
         return (False, node_str)
     
     def get_object_node(self, node_str):
@@ -186,11 +175,9 @@ class HeteroGraph:
         Uniqueness is determined by name only.
         Returns: (node_name, node_name) for consistency with existing code
         """
-        # Check if object already exists
         if name in self.objects:
             return (name, name)
         
-        # Create new object node
         obj_node = ObjectNode(name)
         self.objects[name] = obj_node
         
@@ -216,25 +203,21 @@ class HeteroGraph:
             return None
         
         if previous_conversation and self.current_conversation_id is not None:
-            # Update existing conversation
             conversation = self.conversations.get(self.current_conversation_id)
             if conversation:
                 conversation.add_messages(messages, clip_id)
                 conversation.add_clip(clip_id)
                 return conversation.id
             else:
-                # Current conversation ID is invalid, create new one
                 previous_conversation = False
         
         if not previous_conversation:
-            # Create new conversation - convert messages to 4-element format first
             formatted_messages = []
             for msg in messages:
                 if isinstance(msg, list) and len(msg) >= 2:
                     speaker = msg[0]
                     content = msg[1]
-                    # Generate embedding for the message using text-embedding-3-small
-                    # Remove angle brackets from speaker name for embedding: "<Alice>" -> "Alice"
+                    # Embed messages without speaker angle brackets.
                     speaker_name = speaker
                     if speaker_name.startswith("<") and speaker_name.endswith(">"):
                         speaker_name = speaker_name[1:-1]
@@ -244,7 +227,6 @@ class HeteroGraph:
                     except Exception as e:
                         print(f"Warning: Failed to get embedding for message, using None: {e}")
                         embedding = None
-                    # Store as [speaker, content, clip_id, embedding]
                     formatted_messages.append([speaker, content, clip_id, embedding])
             
             conversation = Conversation(clip_id=clip_id, messages=formatted_messages)
@@ -271,22 +253,18 @@ class HeteroGraph:
         Returns:
             Edge object if found, None otherwise
         """
-        # Only check high-level namespaces at clip_id=0.
         for edge_id, edge in self.edges.items():
             if edge.clip_id != clip_id:
                 continue
             if edge.scene != scene:
                 continue
             
-            # Check if content matches
             if edge.content != content:
                 continue
             
-            # For attributes (target is None)
             if target is None:
                 if edge.source == source and edge.target is None:
                     return edge
-            # For relationships (target is not None) - only check exact match
             else:
                 if edge.source == source and edge.target == target:
                     return edge
@@ -294,33 +272,21 @@ class HeteroGraph:
         return None
     
     def add_edge(self, edge):
-        # Check if source and target nodes exist
-        # Edges store node names as strings, so we need to check:
-        # - For characters: direct lookup in self.characters (with angle brackets)
-        # - For objects: direct lookup in self.objects by name
-        
         source_exists = False
-        # If source has angle brackets, it's a character; otherwise it's an object
         if edge.source.startswith("<") and edge.source.endswith(">"):
-            # It's a character - check directly
             if edge.source in self.characters:
                 source_exists = True
         else:
-            # It's an object - check by name
             if edge.source in self.objects:
                 source_exists = True
         
         target_exists = False
-        # Special case: None is allowed as target without creating a node
         if edge.target is None:
             target_exists = True
-        # If target has angle brackets, it's a character; otherwise it's an object
         elif edge.target.startswith("<") and edge.target.endswith(">"):
-            # It's a character - check directly
             if edge.target in self.characters:
                 target_exists = True
         else:
-            # It's an object - check by name
             if edge.target in self.objects:
                 target_exists = True
         
@@ -330,9 +296,7 @@ class HeteroGraph:
             raise ValueError(f"Target node '{edge.target}' not found in graph")
 
         self.edges[edge.id] = edge
-        # Add to both adjacency lists (edges are directed by default)
         self.adjacency_list_out[edge.source].append(edge.id)
-        # Handle None target for adjacency list
         if edge.target is not None:
             self.adjacency_list_in[edge.target].append(edge.id)
         else:
@@ -351,16 +315,13 @@ class HeteroGraph:
         Returns:
             edge.id if added/updated, None if skipped
         """
-        # Only process high-level namespaces
         if edge.clip_id != 0:
-            # For non-high-level edges, use regular add_edge
             return self.add_edge(edge)
 
         # Normalize namespace for high-level edges.
         if edge.scene is None:
             edge.scene = "high-level"
         
-        # Check if edge already exists
         existing_edge = self._find_existing_high_level_edge(
             source=edge.source,
             content=edge.content,
@@ -370,7 +331,6 @@ class HeteroGraph:
         )
         
         if existing_edge:
-            # Edge already exists - update confidence if new one is higher
             new_confidence = getattr(edge, 'confidence', None)
             old_confidence = getattr(existing_edge, 'confidence', None)
             
@@ -378,10 +338,8 @@ class HeteroGraph:
                 existing_edge.confidence = new_confidence
                 return existing_edge.id
             else:
-                # Skip adding duplicate with lower or equal confidence
                 return None
         else:
-            # New edge - add it normally
             return self.add_edge(edge)
 
     def _match_and_merge_character(self, char_name, character_appearance, similarity_threshold=0.85):
@@ -402,23 +360,19 @@ class HeteroGraph:
         
         new_appearance = character_appearance[char_name]
         
-        # Get embedding for the new character's appearance
         try:
             new_appearance_emb = get_embedding(new_appearance)
         except Exception as e:
             print(f"Warning: Failed to get embedding for character appearance: {e}")
             return None
         
-        # Compare with all existing characters (only <character_X> can be removed)
         best_match = None
         best_similarity = 0.0
         
         for existing_char_name in self.characters:
-            # Only consider <character_X> for removal (not named characters, not robot)
             if not existing_char_name.startswith("<character_") or existing_char_name == "<robot>":
                 continue
             
-            # Get appearance for existing character
             if existing_char_name in character_appearance:
                 existing_appearance = character_appearance[existing_char_name]
                 try:
@@ -430,15 +384,11 @@ class HeteroGraph:
                 except Exception as e:
                     continue
         
-        # If match found, merge the characters
         if best_match:
-            # Remove angle brackets for rename_character
             old_name_plain = best_match.strip("<>")
             new_name_plain = char_name.strip("<>")
             
-            # Rename the existing character to the new name
             if self.rename_character(old_name_plain, new_name_plain):
-                # Remove the matched character from character_appearance
                 if best_match in character_appearance:
                     del character_appearance[best_match]
                 print(f"Matched and merged character: {best_match} -> {char_name} (similarity: {best_similarity:.3f})")
@@ -466,8 +416,7 @@ class HeteroGraph:
         if not triples:
             return
         
-        # Track inserted edges to avoid duplicates within the same list
-        # Use (source, target, content) as the key
+        # Deduplicate triples before batched embedding.
         seen_edges = set()
         parsed_edges = []
 
@@ -487,50 +436,40 @@ class HeteroGraph:
             edge_content = triple[1]
             target_str = triple[2]
             
-            # Skip if source is None
             if source_str is None:
                 continue
             
-            # Normalize edge content to string and skip empty/null values.
             if edge_content is None:
                 continue
             edge_content = str(edge_content).strip()
             if not edge_content:
                 continue
             
-            # Parse source node
             is_char_src, src_name = self._parse_node_string(source_str)
             
             if is_char_src:
-                # Source is a character - create if doesn't exist
                 if src_name not in self.characters:
                     self.add_character(src_name)
                     source_node_name = src_name
                 else:
                     source_node_name = src_name
             else:
-                # Source is an object - get or create
                 _, source_node_name = self._get_or_create_object_node(src_name)
             
-            # Handle null/Null target - use None as target but don't create object node
             if target_str is None or (isinstance(target_str, str) and target_str.lower() == "null"):
                 target_node_name = None
             else:
-                # Parse target node
                 is_char_tgt, tgt_name = self._parse_node_string(target_str)
                 
                 if is_char_tgt:
-                    # Target is a character - create if doesn't exist
                     if tgt_name not in self.characters:
                         self.add_character(tgt_name)
                         target_node_name = tgt_name
                     else:
                         target_node_name = tgt_name
                 else:
-                    # Target is an object - get or create
                     _, target_node_name = self._get_or_create_object_node(tgt_name)
             
-            # Check for duplicate edge
             edge_key = (source_node_name, target_node_name, edge_content)
             if edge_key in seen_edges:
                 continue  # Skip duplicate
@@ -542,7 +481,6 @@ class HeteroGraph:
         if not parsed_edges:
             return
 
-        # Batch-insert edge content embeddings for this clip only.
         edge_contents = [item[2] for item in parsed_edges]
         edge_embeddings = [None] * len(parsed_edges)
         try:
@@ -557,7 +495,6 @@ class HeteroGraph:
         except Exception as e:
             print(f"Warning: batch edge embedding insertion failed for clip {clip_id}: {e}")
 
-        # Create and add edges (fallback to per-edge embedding where needed).
         for (source_node_name, target_node_name, edge_content, triple), edge_embedding in zip(parsed_edges, edge_embeddings):
             if edge_embedding is None:
                 try:
@@ -584,6 +521,9 @@ class HeteroGraph:
         return set(self.adjacency_list_out[node_id]) | set(self.adjacency_list_in[node_id])
 
     def get_connected_edges(self, character1, character2):
+        return self._get_connected_edges(character1, character2)
+
+    def _get_connected_edges(self, character1, character2, through_clip=None):
         """
         Get all edges directly or indirectly connected between two characters.
         
@@ -594,17 +534,16 @@ class HeteroGraph:
         Args:
             character1: First character name (with or without angle brackets, e.g., "<Alice>" or "Alice")
             character2: Second character name (with or without angle brackets, e.g., "<Bob>" or "Bob")
+            through_clip: If provided, ignore evidence from later clips.
         
         Returns:
             list: List of Edge objects that are directly or indirectly connected between the two characters
         """
-        # Normalize character names (add angle brackets if needed)
         if not character1.startswith("<") or not character1.endswith(">"):
             character1 = f"<{character1}>"
         if not character2.startswith("<") or not character2.endswith(">"):
             character2 = f"<{character2}>"
         
-        # Check if both characters exist
         if character1 not in self.characters:
             raise ValueError(f"Character '{character1}' not found in graph")
         if character2 not in self.characters:
@@ -613,60 +552,54 @@ class HeteroGraph:
         result_edges = []
         result_edge_ids = set()
         
-        # 1. Get all direct edges (where either character is source or target)
+        # Collect direct and short-window object-mediated connections.
         char1_edges = self.edges_of(character1)
         char2_edges = self.edges_of(character2)
         
-        # Direct edges: edges where both characters are involved
         direct_edges = char1_edges & char2_edges
         for edge_id in direct_edges:
             if edge_id not in result_edge_ids:
                 edge = self.edges.get(edge_id)
-                if edge is not None:
+                if edge is not None and (through_clip is None or edge.clip_id <= through_clip):
                     result_edges.append(edge)
                     result_edge_ids.add(edge_id)
         
-        # 2. Find indirect connections through objects
-        # Get all edges where character1 is involved
         for edge_id in char1_edges:
             edge1 = self.edges.get(edge_id)
             if edge1 is None:
                 continue
+            if through_clip is not None and edge1.clip_id > through_clip:
+                continue
             
-            # Get the other node (not character1)
             other_node = None
             if edge1.source == character1:
                 other_node = edge1.target
             elif edge1.target == character1:
                 other_node = edge1.source
             
-            # Skip if other_node is None or is a character
             if other_node is None:
                 continue
             
-            # Check if other_node is an object (not a character)
             is_char, _ = self._parse_node_string(other_node)
             if is_char:
                 continue  # Skip if it's a character
             
-            # Find all edges where this object connects to character2
             object_edges = self.edges_of(other_node)
             for edge_id2 in object_edges:
                 edge2 = self.edges.get(edge_id2)
                 if edge2 is None:
                     continue
+                if through_clip is not None and edge2.clip_id > through_clip:
+                    continue
                 
-                # Check if edge2 connects the object to character2
                 connects_to_char2 = False
                 if (edge2.source == other_node and edge2.target == character2) or \
                    (edge2.target == other_node and edge2.source == character2):
                     connects_to_char2 = True
                 
                 if connects_to_char2:
-                    # Check clip_id difference < 4
                     clip_diff = abs(edge1.clip_id - edge2.clip_id)
                     if clip_diff < 4:
-                        # Add both edges to result
                         if edge_id not in result_edge_ids:
                             result_edges.append(edge1)
                             result_edge_ids.add(edge_id)
@@ -699,7 +632,7 @@ class HeteroGraph:
         inserted_by_scene = {"high-level": 0, "appearance": 0}
         skipped = 0
 
-        # Work in chunks to prevent oversized embedding requests.
+        # Bound embedding request size.
         for start in range(0, len(target_edges), batch_size):
             chunk_edges = target_edges[start:start + batch_size]
             chunk_texts = []
@@ -738,7 +671,7 @@ class HeteroGraph:
                     "Warning: failed batch embedding insertion for high-level/appearance "
                     f"edges [{start}:{start + len(chunk_edges)}]: {e}"
                 )
-                # Fallback to single edge embedding to salvage progress.
+                # Fall back to per-edge embedding.
                 for idx in chunk_indices:
                     edge = chunk_edges[idx]
                     try:
@@ -766,19 +699,15 @@ class HeteroGraph:
         Generate embeddings for all nodes (characters and objects) in batch.
         This is more efficient than generating embeddings one by one during node creation.
         """
-        # Collect all node names that need embeddings
         node_names_for_embedding = []
         node_objects = []
         
-        # Process character nodes (remove angle brackets for embedding)
         for char_name, char_node in self.characters.items():
             if char_node.embedding is None:
-                # Remove angle brackets before calculating embedding
                 name_for_embedding = char_name.strip("<>") if char_name.startswith("<") and char_name.endswith(">") else char_name
                 node_names_for_embedding.append(name_for_embedding)
                 node_objects.append(('character', char_node))
         
-        # Process object nodes
         for obj_name, obj_node in self.objects.items():
             if obj_node.embedding is None:
                 node_names_for_embedding.append(obj_name)
@@ -788,7 +717,6 @@ class HeteroGraph:
             print("No nodes need embedding generation")
             return
         
-        # Generate all embeddings in batch
         try:
             embeddings = get_multiple_embeddings(node_names_for_embedding)
             for (node_type, node), embedding in zip(node_objects, embeddings):
@@ -796,7 +724,6 @@ class HeteroGraph:
             print(f"{len(embeddings)} node embeddings inserted ({len([n for n, _ in node_objects if n == 'character'])} characters, {len([n for n, _ in node_objects if n == 'object'])} objects)")
         except Exception as e:
             print(f"Warning: Failed to generate node embeddings in batch: {e}")
-            # Fallback: generate one by one
             for (node_type, node), name in zip(node_objects, node_names_for_embedding):
                 try:
                     node.embedding = get_embedding(name)
@@ -807,80 +734,172 @@ class HeteroGraph:
     # --------------------------------------------------------
     # Abstract Information API
     # --------------------------------------------------------
-    def character_attributes(self, character_name):
+    def _reset_abstraction_state(self):
+        """Clear incremental-abstraction bookkeeping.
+
+        Called at the start of run_abstraction so that replaying abstraction
+        (e.g. from a checkpoint in the ablation script) starts from a clean
+        slate regardless of any prior incremental state.
         """
-        Extract character attributes by analyzing all edges connected to the character.
-        
+        self._char_consumed_edges = defaultdict(set)
+        self._char_last_degree = defaultdict(int)
+        self._pair_consumed_edges = defaultdict(set)
+        self._pair_last_degree = defaultdict(int)
+
+    def _low_level_edges_of(self, node, through_clip=None):
+        """Return incident low-level edge ids visible through the given clip."""
+        edge_ids = self.edges_of(node)
+        return {
+            eid for eid in edge_ids
+            if self.edges.get(eid) is not None
+            and self.edges[eid].clip_id > 0
+            and (through_clip is None or self.edges[eid].clip_id <= through_clip)
+        }
+
+    def _low_level_degree(self, node, through_clip=None):
+        return len(self._low_level_edges_of(node, through_clip))
+
+    def _existing_attributes_of(self, character_name):
+        """Return list of [attribute, confidence] for already-extracted high-level
+        attribute edges of this character (clip_id=0, scene='high-level', target=None)."""
+        if not character_name.startswith("<") or not character_name.endswith(">"):
+            character_name = f"<{character_name}>"
+        result = []
+        for eid in self.edges_of(character_name):
+            edge = self.edges.get(eid)
+            if edge is None:
+                continue
+            if edge.clip_id == 0 and edge.scene == "high-level" and edge.target is None and edge.source == character_name:
+                result.append([edge.content, getattr(edge, "confidence", None)])
+        return result
+
+    def _existing_relationships_between(self, character1, character2):
+        """Return list of [source, relationship, target, confidence] for already-
+        extracted high-level relationship edges between the two characters
+        (either direction)."""
+        if not character1.startswith("<") or not character1.endswith(">"):
+            character1 = f"<{character1}>"
+        if not character2.startswith("<") or not character2.endswith(">"):
+            character2 = f"<{character2}>"
+        result = []
+        seen = set()
+        for eid in (self.edges_of(character1) | self.edges_of(character2)):
+            edge = self.edges.get(eid)
+            if edge is None:
+                continue
+            if edge.clip_id != 0 or edge.scene != "high-level" or edge.target is None:
+                continue
+            pair = frozenset({edge.source, edge.target})
+            if pair != frozenset({character1, character2}):
+                continue
+            key = (edge.source, edge.content, edge.target)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append([edge.source, edge.content, edge.target, getattr(edge, "confidence", None)])
+        return result
+
+    def _shared_low_level_edge_ids(self, character1, character2, through_clip=None):
+        """Return the set of low-level edge ids that connect the two characters
+        (directly, or indirectly through an object within a clip window of 4),
+        i.e. the low-level subset of get_connected_edges."""
+        connected = self._get_connected_edges(character1, character2, through_clip)
+        return {e.id for e in connected if e.clip_id > 0}
+
+    def character_attributes(self, character_name, incremental=False, through_clip=None):
+        """
+        Extract character attributes by analyzing edges connected to the character.
+
         This function:
-        1. Collects all edges (incoming and outgoing) connected to the character
+        1. Collects edges (incoming and outgoing) connected to the character
         2. Formats them as a readable string (one edge per line)
         3. Combines with prompt_character_summary
         4. Uses LLM to generate character attributes
         5. Parses the LLM output and creates attribute edges in the graph
-        
+
         Args:
             character_name: Character name (with or without angle brackets, e.g., "<Alice>" or "Alice")
-        
+            incremental: If True, only feed NEW low-level edges (since the last summary of
+                this character) and inject already-extracted attributes into the prompt so
+                the LLM does not regenerate them. Also updates the consumed-edge bookkeeping.
+            through_clip: If provided, only use evidence available through that clip.
+
         Returns:
             int: Token usage for this LLM call
         """
-        # Ensure character name has angle brackets for lookup
         if not character_name.startswith("<") or not character_name.endswith(">"):
             character_name = f"<{character_name}>"
-        
-        # Check if character exists
+
         if character_name not in self.characters:
             raise ValueError(f"Character '{character_name}' not found in graph")
-        
-        # Get all edges connected to this character
-        edge_ids = self.edges_of(character_name)
-        
+
+        if incremental:
+            current_low = self._low_level_edges_of(character_name, through_clip)
+            new_ids = current_low - self._char_consumed_edges.get(character_name, set())
+            if not new_ids:
+                print(f"Info: Skip incremental character_attributes for {character_name}: no new low-level edges.")
+                return 0
+            edge_ids = new_ids
+        else:
+            edge_ids = self.edges_of(character_name)
+
         if not edge_ids:
-            # No edges found, no LLM call made
             print(f"Info: Skip character_attributes for {character_name}: no connected edges.")
             return 0
-        
-        # Format edges as strings (one per line)
+
         edge_lines = []
         for edge_id in sorted(edge_ids):  # Sort for consistent ordering
             edge = self.edges.get(edge_id)
             if edge is None:
                 continue
-            
-            # Format: source, content, target
+
             target_str = edge.target if edge.target is not None else "null"
             edge_str = f"{edge.source}, {edge.content}, {target_str}"
             if edge.scene:
                 edge_str += f", scene: {edge.scene}"
-            
+
             edge_lines.append(edge_str)
-        
-        # Combine all edge descriptions into a single string
+
         edges_text = "\n".join(edge_lines)
-        
-        # Create the full prompt with proper string formatting
-        full_prompt = f"Character: {character_name}\n\nCharacter behaviors (from graph edges):\n{edges_text}\n{prompt_character_summary}"
+
+        existing_section = ""
+        if incremental:
+            existing_attrs = self._existing_attributes_of(character_name)
+            if existing_attrs:
+                existing_section = (
+                    "\n\nExisting attributes already extracted (do NOT regenerate these "
+                    "unless the new evidence below contradicts or meaningfully extends them):\n"
+                    + json.dumps(existing_attrs, ensure_ascii=False)
+                )
+
+        full_prompt = (
+            f"Character: {character_name}\n\n"
+            f"Character behaviors (from graph edges):\n{edges_text}"
+            f"{existing_section}\n{prompt_character_summary}"
+        )
         try:
             attributes_response, tokens = generate_text_response(full_prompt)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
             attributes_response, tokens = generate_text_response(full_prompt)
-        
-        # Parse the LLM response
+
         attributes_response = strip_code_fences(attributes_response)
         try:
             attributes_dict = json.loads(attributes_response)
         except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response as JSON: {e}")
-            print(f"Response was: {attributes_response}")
-            return int(tokens or 0)
-        
-        # Create edges for each attribute
+            import re
+            matches = re.findall(r'"([^"]*)"\s*:\s*(\d+)', attributes_response)
+            if matches:
+                attributes_dict = {k: int(v) for k, v in matches}
+            else:
+                print(f"Failed to parse LLM response as JSON: {e}")
+                print(f"Response was: {attributes_response}")
+                return tokens
+
         for attribute_name, confidence in attributes_dict.items():
-            # Only create edge if confidence >= 50 (as per prompt instructions)
             if not isinstance(confidence, (int, float)) or confidence < 50:
                 continue
-                
+
             edge = Edge(
                 clip_id=0,
                 source=character_name,
@@ -896,104 +915,133 @@ class HeteroGraph:
                     f"Warning: Failed to add high-level attribute edge for {character_name} "
                     f"(attribute='{attribute_name}', confidence={confidence}): {e}"
                 )
-        
-        return int(tokens or 0)
 
-    def character_relationships(self, character1, character2):
+        # Advance incremental bookkeeping after a successful summary.
+        if incremental:
+            self._char_consumed_edges[character_name].update(edge_ids)
+            self._char_last_degree[character_name] = len(current_low)
+
+        return tokens
+
+    def character_relationships(self, character1, character2, incremental=False, through_clip=None):
         """
         Extract character relationships by analyzing all edges between two characters.
-        
+
         This function:
         1. Gets all edges directly or indirectly connected between the two characters
         2. Formats them as a readable string (one edge per line)
         3. Combines with prompt_character_relationships
         4. Uses LLM to generate relationship descriptions
         5. Parses the LLM output and creates relationship edges in the graph
-        
+
         Args:
             character1: First character name (with or without angle brackets, e.g., "<Alice>" or "Alice")
             character2: Second character name (with or without angle brackets, e.g., "<Bob>" or "Bob")
-        
+            incremental: If True, only feed NEW shared low-level edges (since the last summary of
+                this pair) and inject already-extracted relationships into the prompt so the LLM
+                does not regenerate them. Also updates the consumed-edge bookkeeping.
+            through_clip: If provided, only use evidence available through that clip.
+
         Returns:
             int: Token usage for this LLM call
         """
-        # Normalize character names (add angle brackets if needed)
         if not character1.startswith("<") or not character1.endswith(">"):
             character1 = f"<{character1}>"
         if not character2.startswith("<") or not character2.endswith(">"):
             character2 = f"<{character2}>"
-        
-        # Check if both characters exist
+
         if character1 not in self.characters:
             raise ValueError(f"Character '{character1}' not found in graph")
         if character2 not in self.characters:
             raise ValueError(f"Character '{character2}' not found in graph")
-        
-        # Get all connected edges between the two characters
-        connected_edges = self.get_connected_edges(character1, character2)
-        
+
+        pair_key = tuple(sorted((character1, character2)))
+
+        if incremental:
+            current_shared = self._shared_low_level_edge_ids(character1, character2, through_clip)
+            new_ids = current_shared - self._pair_consumed_edges.get(pair_key, set())
+            if not new_ids:
+                print(f"Info: Skip incremental character_relationships for {character1}, {character2}: no new shared low-level edges.")
+                return 0
+            new_edges = [self.edges[eid] for eid in sorted(new_ids)]
+            connected_edges = new_edges
+        else:
+            connected_edges = self.get_connected_edges(character1, character2)
+
         if not connected_edges or len(connected_edges) < 3:
             print(
                 f"Info: Skip character_relationships for {character1}, {character2}: "
                 f"insufficient connected edges ({len(connected_edges) if connected_edges else 0} < 3)."
             )
             return 0
-        
-        # Format edges as strings (one per line)
+
         edge_lines = []
         for edge in sorted(connected_edges, key=lambda e: (e.clip_id, e.id)):  # Sort by clip_id for chronological order
-            # Format: source, content, target
             target_str = edge.target if edge.target is not None else "null"
             edge_str = f"{edge.source}, {edge.content}, {target_str}"
             if edge.scene:
                 edge_str += f", scene: {edge.scene}"
-            
+
             edge_lines.append(edge_str)
-        
-        # Combine all edge descriptions into a single string
+
         edges_text = "\n".join(edge_lines)
-        
-        # Create the full prompt with proper string formatting
-        full_prompt = f"Character 1: {character1}\nCharacter 2: {character2}\n\nCharacter interactions (from graph edges):\n{edges_text}\n{prompt_character_relationships}"
+
+        existing_section = ""
+        if incremental:
+            existing_rels = self._existing_relationships_between(character1, character2)
+            if existing_rels:
+                existing_section = (
+                    "\n\nExisting relationships already extracted (do NOT regenerate these "
+                    "unless the new evidence below contradicts or meaningfully extends them):\n"
+                    + json.dumps(existing_rels, ensure_ascii=False)
+                )
+
+        full_prompt = (
+            f"Character 1: {character1}\nCharacter 2: {character2}\n\n"
+            f"Character interactions (from graph edges):\n{edges_text}"
+            f"{existing_section}\n{prompt_character_relationships}"
+        )
         try:
             relationships_response, tokens = generate_text_response(full_prompt)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
             relationships_response, tokens = generate_text_response(full_prompt)
 
-        # Parse the LLM response
         relationships_response = strip_code_fences(relationships_response)
         try:
             relationships_list = json.loads(relationships_response)
         except json.JSONDecodeError as e:
-            print(f"Failed to parse LLM response as JSON: {e}")
-            print(f"Response was: {relationships_response}")
-            return int(tokens or 0)
-        
-        # Validate and create edges for each relationship
+            import re
+            matches = re.findall(r'\[\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*\d+\s*\]', relationships_response)
+            if matches:
+                relationships_list = []
+                for m in matches:
+                    try:
+                        relationships_list.append(json.loads(m))
+                    except:
+                        continue
+            else:
+                print(f"Failed to parse LLM response as JSON: {e}")
+                print(f"Response was: {relationships_response}")
+                return tokens
+
         relationships_created = []
         for rel in relationships_list:
-            # Expected format: [character1, relationship, character2, confidence]
             if not isinstance(rel, list) or len(rel) < 4:
                 continue
-            
+
             rel_char1, relationship, rel_char2, confidence = rel[0], rel[1], rel[2], rel[3]
-            
-            # Only create edge if confidence >= 50 (as per prompt instructions)
+
             if not isinstance(confidence, (int, float)) or confidence < 50:
                 continue
-            
-            # Normalize character names in the relationship
+
             if not rel_char1.startswith("<") or not rel_char1.endswith(">"):
                 rel_char1 = f"<{rel_char1}>"
             if not rel_char2.startswith("<") or not rel_char2.endswith(">"):
                 rel_char2 = f"<{rel_char2}>"
-            
-            # Verify the characters match the input (order might be swapped)
+
             if (rel_char1 == character1 and rel_char2 == character2) or \
                (rel_char1 == character2 and rel_char2 == character1):
-                # Create edge: source=character1, content=relationship, target=character2
-                # Use the order from the relationship (LLM's choice)
                 edge = Edge(
                     clip_id=0,
                     source=rel_char1,
@@ -1008,38 +1056,213 @@ class HeteroGraph:
                 except Exception as e:
                     print(f"Failed to add relationship edge: {e}")
                     pass
-        
-        return int(tokens or 0)
+
+        # Advance incremental bookkeeping after a successful summary.
+        if incremental:
+            self._pair_consumed_edges[pair_key].update(new_ids)
+            self._pair_last_degree[pair_key] = len(current_shared)
+
+        return tokens
+
+    # --------------------------------------------------------
+    # Incremental / threshold-driven abstraction driver
+    # --------------------------------------------------------
+    def _characters_touched_in_clip(self, clip_id):
+        """Return the set of character names that have at least one low-level
+        edge in the given clip."""
+        touched = set()
+        for edge in self.edges.values():
+            if edge.clip_id != clip_id:
+                continue
+            for endpoint in (edge.source, edge.target):
+                if endpoint is None:
+                    continue
+                if endpoint.startswith("<") and endpoint.endswith(">") and endpoint in self.characters:
+                    touched.add(endpoint)
+        return touched
+
+    def _incremental_step(self, clip_id, config):
+        """Check thresholds for characters/pairs touched by `clip_id` and fire
+        incremental summaries when crossed. Mirrors the behavior of interleaving
+        abstraction after this clip's edges were inserted.
+
+        Unified trigger: a character is summarized whenever its low-level degree
+        crosses a multiple of interval_node (first summary at interval_node, then
+        every interval_node NEW edges). Pairs behave the same with interval_pair
+        over their shared low-level edge count. No separate per-character degree
+        gate is needed for pairs because shared edges are a subset of each
+        member's incident edges.
+        """
+        touched = self._characters_touched_in_clip(clip_id)
+        if not touched:
+            return 0, 0
+
+        attr_tokens = empty_usage()
+        rel_tokens = empty_usage()
+
+        # Summarize characters after each interval_node of new evidence.
+        eligible_chars = []
+        for char in touched:
+            degree = self._low_level_degree(char, clip_id)
+            last = self._char_last_degree.get(char, 0)
+            if degree >= config.interval_node and (degree - last) >= config.interval_node:
+                eligible_chars.append(char)
+        for char in eligible_chars:
+            try:
+                attr_tokens = merge_usage(
+                    attr_tokens,
+                    self.character_attributes(
+                        char,
+                        incremental=True,
+                        through_clip=clip_id,
+                    ),
+                )
+            except Exception as e:
+                print(f"✗ Error in incremental character_attributes for {char}: {e}")
+
+        # Evaluate pairs touched by this clip at each interval_pair crossing.
+        evaluated_pairs = set()
+        for c1 in touched:
+            for c2 in self.characters:
+                if c2 == c1:
+                    continue
+                pair_key = tuple(sorted((c1, c2)))
+                if pair_key in evaluated_pairs:
+                    continue
+                evaluated_pairs.add(pair_key)
+                count = len(self._shared_low_level_edge_ids(c1, c2, clip_id))
+                last = self._pair_last_degree.get(pair_key, 0)
+                if count >= config.interval_pair and (count - last) >= config.interval_pair:
+                    try:
+                        rel_tokens = merge_usage(
+                            rel_tokens,
+                            self.character_relationships(
+                                c1,
+                                c2,
+                                incremental=True,
+                                through_clip=clip_id,
+                            ),
+                        )
+                    except Exception as e:
+                        print(f"✗ Error in incremental character_relationships for {c1}, {c2}: {e}")
+
+        return attr_tokens, rel_tokens
+
+    def _final_round(self, config):
+        """After the incremental replay, summarize any character/pair whose
+        low-level edge count is at least the lower bound. Uses incremental mode
+        so already-consumed edges are skipped (cheap when fully summarized)."""
+        attr_tokens = empty_usage()
+        rel_tokens = empty_usage()
+
+        # Characters above the node lower bound.
+        for char in list(self.characters.keys()):
+            if self._low_level_degree(char) < config.final_lower_bound_node:
+                continue
+            try:
+                attr_tokens = merge_usage(
+                    attr_tokens,
+                    self.character_attributes(char, incremental=True),
+                )
+            except Exception as e:
+                print(f"✗ Error in final character_attributes for {char}: {e}")
+
+        # Pairs above the pair lower bound (both members above node lower bound).
+        eligible = [c for c in self.characters
+                    if self._low_level_degree(c) >= config.final_lower_bound_node]
+        for i in range(len(eligible) - 1):
+            for j in range(i + 1, len(eligible)):
+                c1, c2 = eligible[i], eligible[j]
+                if len(self._shared_low_level_edge_ids(c1, c2)) < config.final_lower_bound_pair:
+                    continue
+                try:
+                    rel_tokens = merge_usage(
+                        rel_tokens,
+                        self.character_relationships(c1, c2, incremental=True),
+                    )
+                except Exception as e:
+                    print(f"✗ Error in final character_relationships for {c1}, {c2}: {e}")
+
+        return attr_tokens, rel_tokens
+
+    def run_abstraction(self, config):
+        """Run the full threshold-based abstraction pipeline.
+
+        1. (optional) Incremental replay: iterate clips in order, firing
+           character_attributes / character_relationships whenever a node/pair
+           crosses its threshold, feeding only NEW low-level edges + existing
+           attributes to the LLM.
+        2. Final round: summarize any node/pair whose low-level edge count is
+           above the lower bound (catches nodes that never crossed the
+           incremental threshold).
+
+        Resets incremental bookkeeping at the start so this is safe to call on
+        a checkpoint (e.g. from abstraction_ablation.py) regardless of prior
+        state. Returns a token-usage summary dict.
+        """
+        from utils.abstraction_config import AbstractionConfig  # local import avoids cycles
+        if not isinstance(config, AbstractionConfig):
+            raise TypeError("config must be an AbstractionConfig instance")
+
+        self._reset_abstraction_state()
+
+        # Pickle does not preserve Edge._id_counter, so resume above existing ids.
+        from classes.edge_class import Edge
+        Edge._id_counter = max(self.edges.keys()) if self.edges else 0
+
+        attr_tokens = empty_usage()
+        rel_tokens = empty_usage()
+
+        if config.incremental_enabled:
+            clips = sorted({e.clip_id for e in self.edges.values() if e.clip_id > 0})
+            print(f"run_abstraction: incremental replay over {len(clips)} clips "
+                  f"(interval_node={config.interval_node}, interval_pair={config.interval_pair})")
+            for clip_id in clips:
+                a, r = self._incremental_step(clip_id, config)
+                attr_tokens = merge_usage(attr_tokens, a)
+                rel_tokens = merge_usage(rel_tokens, r)
+        else:
+            print("run_abstraction: incremental phase disabled, only final round will run")
+
+        print("run_abstraction: final round")
+        a, r = self._final_round(config)
+        attr_tokens = merge_usage(attr_tokens, a)
+        rel_tokens = merge_usage(rel_tokens, r)
+
+        print(
+            "run_abstraction done. "
+            f"attributes_tokens={usage_total(attr_tokens)}, "
+            f"relationships_tokens={usage_total(rel_tokens)}"
+        )
+        return {
+            "attributes_tokens": usage_total(attr_tokens),
+            "relationships_tokens": usage_total(rel_tokens),
+            "attributes_usage": attr_tokens,
+            "relationships_usage": rel_tokens,
+        }
 
     def extract_conversation_summary(self, conversation_id):
 
-        # Get the conversation
         conversation = self.conversations.get(conversation_id)
         if conversation is None:
             raise ValueError(f"Conversation with id {conversation_id} not found in graph")
         
         if not conversation.messages:
-            # No messages, return empty results
             return {
                 "summary": "",
                 "character_attributes": [],
                 "characters_relationships": []
             }, 0
         
-        # Transform messages into formatted string
         formatted_messages = conversation.format_messages()
-        
-        # Combine with prompt
         full_prompt = prompt_conversation_summary + "\n" + formatted_messages
-        
-        # Call LLM with structured output
+
         try:
             response, tokens = generate_text_response(full_prompt, text_format=ConversationSummary)
         except Exception as e:
             print(f"LLM call failed, retrying... Error: {e}")
             response, tokens = generate_text_response(full_prompt, text_format=ConversationSummary)
 
-        # If parser fallback returned raw text, parse to structured object.
         if isinstance(response, str):
             try:
                 response = ConversationSummary.model_validate_json(strip_code_fences(response))
@@ -1049,41 +1272,29 @@ class HeteroGraph:
                     "summary": "",
                     "character_attributes": [],
                     "characters_relationships": []
-                }, int(tokens or 0)
+                }, tokens
 
-        # Extract the three components
         summary = response.summary
         character_attributes = response.character_attributes
         characters_relationships = response.characters_relationships
         
-        # Update conversation.summary
         conversation.summary = summary
-        
-        # Insert character attributes as edges
-        # Format: [character, attribute, confidence_score]
-        # Edge format: source=character, content=attribute, target=None, clip_id=0, confidence=confidence_score
+
         for attr_item in character_attributes:
-            if not isinstance(attr_item, list) or len(attr_item) < 3:
-                continue
-            
             char_name = attr_item[0]
             attribute = attr_item[1]
             confidence = attr_item[2]
             
-            # Only include attributes with confidence >= 50
             if not isinstance(confidence, (int, float)) or confidence < 50:
                 continue
             
-            # Normalize character name (add angle brackets if needed)
             if not char_name.startswith("<") or not char_name.endswith(">"):
                 char_name = f"<{char_name}>"
             
-            # Add character to graph if it doesn't exist (characters mentioned in conversations may not have appeared in behaviors yet)
             if char_name not in self.characters:
                 self.add_character(char_name)
                 print(f"Info: Added character '{char_name}' to graph from conversation summary")
             
-            # Create attribute edge (high-level edge: clip_id=0, scene="high-level")
             edge = Edge(
                 clip_id=0,
                 source=char_name,
@@ -1097,29 +1308,20 @@ class HeteroGraph:
             except Exception as e:
                 print(f"Warning: Failed to add attribute edge for {char_name}: {e}")
         
-        # Insert character relationships as edges
-        # Format: [character1, relationship, character2, confidence_score]
-        # Edge format: source=character1, content=relationship, target=character2, clip_id=0, confidence=confidence_score
         for rel_item in characters_relationships:
-            if not isinstance(rel_item, list) or len(rel_item) < 4:
-                continue
-            
             char1 = rel_item[0]
             relationship = rel_item[1]
             char2 = rel_item[2]
             confidence = rel_item[3]
             
-            # Only include relationships with confidence >= 50
             if not isinstance(confidence, (int, float)) or confidence < 50:
                 continue
             
-            # Normalize character names (add angle brackets if needed)
             if not char1.startswith("<") or not char1.endswith(">"):
                 char1 = f"<{char1}>"
             if not char2.startswith("<") or not char2.endswith(">"):
                 char2 = f"<{char2}>"
             
-            # Add characters to graph if they don't exist (characters mentioned in conversations may not have appeared in behaviors yet)
             if char1 not in self.characters:
                 self.add_character(char1)
                 print(f"Info: Added character '{char1}' to graph from conversation summary")
@@ -1127,7 +1329,6 @@ class HeteroGraph:
                 self.add_character(char2)
                 print(f"Info: Added character '{char2}' to graph from conversation summary")
             
-            # Create relationship edge (high-level edge: clip_id=0, scene="high-level")
             edge = Edge(
                 clip_id=0,
                 source=char1,
@@ -1145,7 +1346,7 @@ class HeteroGraph:
             "summary": summary,
             "character_attributes": character_attributes,
             "characters_relationships": characters_relationships
-        }, int(tokens or 0)
+        }, tokens
     
     def insert_character_appearances(self, character_appearance):
         """
@@ -1156,7 +1357,6 @@ class HeteroGraph:
             character_appearance: Dictionary mapping character names to appearance descriptions
                                   Can be a dict or JSON string
         """
-        # Parse character_appearance if it's a JSON string
         if isinstance(character_appearance, str):
             try:
                 character_appearance = json.loads(character_appearance)
@@ -1172,30 +1372,23 @@ class HeteroGraph:
         
         total_edges = 0
         for char_name, appearance_desc in character_appearance.items():
-            # Normalize character name (add angle brackets if needed)
             if not char_name.startswith("<") or not char_name.endswith(">"):
                 char_name = f"<{char_name}>"
             
-            # Verify character exists in graph
             if char_name not in self.characters:
                 print(f"Warning: Character '{char_name}' not found in graph, skipping appearance")
                 continue
             
-            # Ensure appearance is a string (comma-separated)
             if isinstance(appearance_desc, list):
                 appearance_str = ", ".join(str(item) for item in appearance_desc)
             elif isinstance(appearance_desc, dict):
-                # If it's a dict, convert to comma-separated string
                 appearance_str = ", ".join(f"{k}: {v}" for k, v in appearance_desc.items())
             else:
                 appearance_str = str(appearance_desc)
             
-            # Split appearance by commas and create separate edges for each feature
             appearance_features = [feature.strip() for feature in appearance_str.split(",") if feature.strip()]
             
             for feature in appearance_features:
-                # Create appearance edge (clip_id=0, scene="appearance")
-                # Each feature becomes a separate edge with format: "<feature>"
                 edge = Edge(
                     clip_id=0,
                     source=char_name,

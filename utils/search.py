@@ -1,7 +1,3 @@
-# python -m utils.search
-
-import pickle
-from classes.hetero_graph import HeteroGraph
 from classes.output_structure import ParseQueryOutput
 from utils.edge_to_string import high_level_edges_to_string, low_level_edge_to_string
 
@@ -149,26 +145,3 @@ def search_with_parse(query, graph, parse_query_response):
         graph_search_results = "No relevant information found for this query."
     
     return graph_search_results
-
-
-if __name__ == "__main__":
-    # Example usage
-    from utils.llm import generate_text_response
-    from utils.prompts import prompt_parse_query
-    
-    with open("data/semantic_memory/gym_01.pkl", "rb") as f:
-        graph = pickle.load(f)
-    query = "Which takeout should be taken to Anna?"
-    
-    try:
-        parse_query_response, _tokens = generate_text_response(
-            prompt_parse_query + "\n" + query,
-            ParseQueryOutput
-        )
-        result = search_with_parse(query, graph, parse_query_response)
-        print(result)
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-        

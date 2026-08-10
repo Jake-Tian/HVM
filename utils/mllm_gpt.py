@@ -1,85 +1,114 @@
+"""Multimodal LLM via OpenAI GPT.
+
+API key and base URL are read from OPENAI_API_KEY / OPENAI_BASE_URL env vars
+by default.
+"""
+
+import os
+import sys
 from pathlib import Path
 import base64
 import cv2
-import time
 import numpy as np
 from openai import OpenAI
+from utils.llm_gpt import MODEL
+from utils.token_usage import usage_from_response
 
-def get_response(messages, text_format=None):
-    client = OpenAI()
-    if text_format is None:
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=messages,
+
+def _client(api_key=None, base_url=None):
+    return OpenAI(
+        api_key=api_key or os.environ.get("OPENAI_API_KEY"),
+        base_url=base_url or os.environ.get("OPENAI_BASE_URL"),
+    )
+
+
+def _report_llm_failure(model, exc):
+    """Print LLM API failures to stderr (visible even when stdout is quiet-logged)."""
+    try:
+        sys.stderr.write(f"[LLM ERROR] model={model}: {exc}\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def get_response(messages, text_format=None, model=None,
+                  api_key=None, base_url=None, temperature=None):
+    """Call a GPT multimodal LLM. Returns (content, token_usage) or (parsed, token_usage)."""
+    model = model or MODEL
+
+    client = _client(api_key, base_url)
+    create_kwargs = {
+        "model": model,
+        "messages": messages,
+    }
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
+
+    try:
+        if text_format is None:
+            response = client.chat.completions.create(**create_kwargs)
+            return (
+                response.choices[0].message.content,
+                usage_from_response(response, model, "openai"),
+            )
+        response = client.chat.completions.parse(
+            **create_kwargs, response_format=text_format,
         )
-        return response.output_text, getattr(response.usage, "total_tokens", None) or 0
-    else:
-        response = client.responses.parse(
-            model="gpt-5-mini",
-            input=messages,
-            text_format=text_format,
+        return (
+            response.choices[0].message.parsed,
+            usage_from_response(response, model, "openai"),
         )
-        return response.output_parsed, getattr(response.usage, "total_tokens", None) or 0
+    except Exception as e:
+        _report_llm_failure(model, e)
+        raise
 
 
 def generate_messages(images, prompt):
+    """Build OpenAI-style multimodal messages from images + a text prompt.
+
+    images: np.ndarray, path, directory, or iterable of these.
+    Images are resized to half resolution to stay within request size limits.
     """
-    Build messages from images (numpy arrays) or image paths.
-    Args:
-        images: np.ndarray, path, directory, or iterable of these
-        prompt: text prompt
-    """
-    # Normalize to list
     if isinstance(images, (str, Path, np.ndarray)):
         images = [images]
 
-    # Collect image arrays (BGR)
     imgs = []
     for item in images:
         if isinstance(item, np.ndarray):
             imgs.append(item)
-        else:
-            p = Path(item)
-            if p.is_dir():
-                paths = sorted([x for x in p.iterdir() if x.suffix.lower() in [".jpg", ".jpeg"]])
-                for img_path in paths:
-                    img = cv2.imread(str(img_path))
-                    if img is None:
-                        raise ValueError(f"Could not read image: {img_path}")
-                    imgs.append(img)
-            else:
-                img = cv2.imread(str(p))
+            continue
+        p = Path(item)
+        if p.is_dir():
+            paths = sorted([x for x in p.iterdir() if x.suffix.lower() in [".jpg", ".jpeg"]])
+            for img_path in paths:
+                img = cv2.imread(str(img_path))
                 if img is None:
-                    raise ValueError(f"Could not read image: {p}")
+                    raise ValueError(f"Could not read image: {img_path}")
                 imgs.append(img)
+        else:
+            img = cv2.imread(str(p))
+            if img is None:
+                raise ValueError(f"Could not read image: {p}")
+            imgs.append(img)
 
     if not imgs:
         raise ValueError("No images provided.")
 
-    # Encode images to base64
-    base64Frames = []
+    base64_frames = []
     for img in imgs:
+        h, w = img.shape[:2]
+        img = cv2.resize(img, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
         success, buffer = cv2.imencode(".jpg", img)
         if not success:
             raise ValueError("Failed to encode image array to JPG.")
-        base64Frames.append(base64.b64encode(buffer).decode("utf-8"))
+        base64_frames.append(base64.b64encode(buffer).decode("utf-8"))
 
     content = [
-        {
-            "type": "input_text",
-            "text": prompt
-        },
+        {"type": "text", "text": prompt},
         *[
-            {
-                "type": "input_image",
-                "image_url": f"data:image/jpeg;base64,{frame}"
-            }
-            for frame in base64Frames
-        ]
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/jpeg;base64,{frame}"}}
+            for frame in base64_frames
+        ],
     ]
-
-    messages = [{
-        "role": "user",
-        "content": content
-    }]
-    return messages
+    return [{"role": "user", "content": content}]

@@ -5,12 +5,38 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from tqdm import tqdm
 from classes.hetero_graph import HeteroGraph
-from classes.output_structure import EpisodicFormat
-from utils.llm import generate_text_response
+from classes.output_structure import EpisodicFormat, TripleExtraction
+from utils.llm_gpt import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
 from utils.prompts import prompt_generate_episodic_memory, prompt_extract_triples
-from utils.general import Tee, strip_code_fences, load_video_list, merge_character_appearances
+from utils.general import (
+    Tee, QuietStdout, verbose_terminal,
+    load_video_list, merge_character_appearances,
+)
+from utils.token_usage import (
+    add_stage_usage,
+    build_token_summary,
+    usage_total,
+)
+
+
+def extract_behavior_triples(behaviors):
+    behavior_prompt = (
+        prompt_extract_triples
+        + "\n"
+        + json.dumps(behaviors, ensure_ascii=False)
+    )
+    response, tokens = generate_text_response(
+        behavior_prompt,
+        text_format=TripleExtraction,
+    )
+    triples = [
+        [triple.source, triple.content, triple.target]
+        for triple in response.triples
+    ]
+    return triples, tokens
 
 
 def process_full_video(video_name):
@@ -21,7 +47,6 @@ def process_full_video(video_name):
     if not frames_dir.exists() or not frames_dir.is_dir():
         raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
     
-    # Get sorted image folders
     image_folders = sorted(
         [str(folder) for folder in frames_dir.iterdir() if folder.is_dir()],
         key=lambda x: int(Path(x).name)
@@ -29,20 +54,20 @@ def process_full_video(video_name):
     if not image_folders:
         raise ValueError(f"No frame clip folders found in {frames_dir}")
 
-    # image_folders = image_folders[:1] # Uncomment for quick debugging
+    # tqdm stays visible because logs redirect stdout, not stderr.
+    pbar = tqdm(total=len(image_folders) + 3, desc=f"memo {video_name}", file=sys.stderr)
     
     previous_conversation = False
     appearance_dict = dict()    # character name → [appearance description, embedding]
     episodic_memory = dict()
     graph = HeteroGraph()
-    token_summaries = {"mllm": 0, "triples": 0, "attributes": 0, "relationships": 0, "conversation": 0}
+    stage_usage = {}
     
     try: 
         for folder in image_folders:
             print("--------------------------------")
             print("Processing folder: ", folder)
             clip_id = int(Path(folder).name)
-            # Collect images in the current folder
             current_images = sorted(
                 glob.glob(f"{folder}/*.jpg"),
                 key=lambda p: int(Path(p).stem) if Path(p).stem.isdigit() else p,
@@ -51,19 +76,25 @@ def process_full_video(video_name):
             #--------------------------------
             # Episodic Memory
             #--------------------------------
-            # Only pass appearance text to prompt (exclude embeddings).
+            # Exclude embeddings from the appearance prompt.
             appearance_prompt_dict = {name: value[0] for name, value in appearance_dict.items()}
             prompt = "Character appearance from previous videos: \n" + json.dumps(appearance_prompt_dict) + "\n" + prompt_generate_episodic_memory
             messages = generate_messages(current_images, prompt)
             try:
                 response, tokens = get_response(messages, EpisodicFormat)
-                token_summaries["mllm"] += int(tokens or 0)
+                print("MLLM tokens: ", tokens)
+                add_stage_usage(stage_usage, "mllm", tokens)
             except Exception as e:
                 print(f"MLLM call failed, retrying... Error: {e}")
-                response, tokens = get_response(messages, EpisodicFormat)
-                token_summaries["mllm"] += int(tokens or 0)
+                try:
+                    response, tokens = get_response(messages, EpisodicFormat)
+                    add_stage_usage(stage_usage, "mllm", tokens)
+                except Exception as e:
+                    print(f"MLLM call failed, proceeding with empty response... Error: {e}")
+                    traceback.print_exc()
+                    continue
 
-            if token_summaries["mllm"] > 7000000:
+            if usage_total(stage_usage.get("mllm")) > 7000000:
                 print(f"MLLM token limit reached. Stop processing this video.")
                 print("Prompt: \n", prompt)
                 break
@@ -92,12 +123,11 @@ def process_full_video(video_name):
                 else:
                     print(f"Warning: Malformed equivalence line '{behaviors[0]}', skipping rename")
 
-            # Extract summary before creating/updating conversation
             if previous_conversation and len(conversation) == 0 and graph.current_conversation_id is not None:
                 try:
                     print(f"Extracting summary for completed conversation {graph.current_conversation_id}...")
                     result, tokens = graph.extract_conversation_summary(graph.current_conversation_id)
-                    token_summaries["conversation"] += int(tokens or 0)
+                    add_stage_usage(stage_usage, "conversation", tokens)
                     print(f"✓ Conversation summary extracted. Attributes: {len(result['character_attributes'])}, Relationships: {len(result['characters_relationships'])}")
                 except Exception as e:
                     print(f"✗ Error extracting conversation summary: {e}")
@@ -105,44 +135,24 @@ def process_full_video(video_name):
 
             if len(conversation) > 0:
                 graph.update_conversation(clip_id, conversation, previous_conversation=previous_conversation)
-                previous_conversation = True  # Set to True for next iteration
+                previous_conversation = True
             else:
-                previous_conversation = False  # No conversation in this clip, reset for next iteration
+                previous_conversation = False
 
             #--------------------------------
             # Graph Construction
             #--------------------------------
             if behaviors:
-                behavior_prompt = prompt_extract_triples + "\n" + "\n".join(str(b) for b in behaviors)
                 try:
-                    triples_response, tokens = generate_text_response(behavior_prompt)
-                    token_summaries["triples"] += int(tokens or 0)
+                    triples, tokens = extract_behavior_triples(behaviors)
+                    add_stage_usage(stage_usage, "triples", tokens)
                 except Exception as e:
                     print(f"LLM call failed, retrying... Error: {e}")
-                    triples_response, tokens = generate_text_response(behavior_prompt)
-                    token_summaries["triples"] += int(tokens or 0)
-                triples_response = strip_code_fences(triples_response)
-                try:
-                    triples = json.loads(triples_response)
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse triples JSON for clip {clip_id}: {e}")
-                    print(f"Raw triples response: {triples_response}")
-                    triples = []
-                except Exception as e:
-                    print(f"Warning: Unexpected error while parsing triples for clip {clip_id}: {e}")
-                    print(f"Raw triples response: {triples_response}")
-                    triples = []
-
-                if not isinstance(triples, list):
-                    print(
-                        f"Warning: Triples payload is not a list for clip {clip_id} "
-                        f"(got {type(triples).__name__}), skipping triples."
-                    )
-                    triples = []
+                    triples, tokens = extract_behavior_triples(behaviors)
+                    add_stage_usage(stage_usage, "triples", tokens)
             else:
                 triples = []
             
-            # Pass character_appearance to insert_triples for matching and merging
             graph.insert_triples(triples, clip_id, scene)
             print(f"Inserted {len(triples)} triples into graph for clip {clip_id}")
 
@@ -151,7 +161,6 @@ def process_full_video(video_name):
                 for equivalence in equivalence_list:
                     graph.rename_character(equivalence[0], equivalence[1])
 
-            # Store episodic memory for this clip
             episodic_memory[clip_id] = {
                 "folder": folder,
                 "characters_behavior": behaviors,
@@ -160,19 +169,18 @@ def process_full_video(video_name):
                 "scene": scene,
                 "triples": triples
             }
+            pbar.update(1)
 
-        # Extract summary for any remaining active conversation at the end
         if previous_conversation and graph.current_conversation_id is not None:
             try:
                 print(f"Extracting summary for final conversation {graph.current_conversation_id}...")
                 result, tokens = graph.extract_conversation_summary(graph.current_conversation_id)
-                token_summaries["conversation"] += int(tokens or 0)
+                add_stage_usage(stage_usage, "conversation", tokens)
                 print(f"✓ Final conversation summary extracted. Attributes: {len(result['character_attributes'])}, Relationships: {len(result['characters_relationships'])}")
             except Exception as e:
                 print(f"✗ Error extracting final conversation summary: {e}")
                 traceback.print_exc()
 
-        # Insert character appearances
         print("Inserting character appearances...")
         print("Number of edges: ", len(graph.edges))
         try:
@@ -182,62 +190,85 @@ def process_full_video(video_name):
             print(f"✗ Error inserting character appearances: {e}")
             traceback.print_exc()
 
-        # --------------------------------
-        # Abstract Memory
-        # --------------------------------
-        # Generate character attributes
-        print("Generating character attributes...")
-        print("Number of edges: ", len(graph.edges))
-        degrees = graph.get_node_degrees()
-        # Select all characters whose degree is greater than 10
-        characters = [character for character in graph.characters if degrees.get(character, 0) > 10]
-
-        for character in characters:
-            try: 
-                tokens = graph.character_attributes(character)
-                token_summaries["attributes"] += int(tokens or 0)
-            except Exception as e:
-                print(f"✗ Error generating character attributes for {character}: {e}")
-                traceback.print_exc()
-                print("Continuing to next character...")
-                continue
-        print("Character attributes generated.")
-        print("Number of edges: ", len(graph.edges))
-
-        # Generate character relationships
-        for i in range(len(characters)-1):
-            for j in range(i+1, len(characters)):
-                try:
-                    tokens = graph.character_relationships(characters[i], characters[j])
-                    token_summaries["relationships"] += int(tokens or 0)
-                except Exception as e:
-                    print(f"✗ Error generating character relationships for {characters[i]} and {characters[j]}: {e}")
-                    traceback.print_exc()
-                    print("Continuing to next character pair...")
-                    continue
-        print("Character relationships generated.")
-        print("Number of edges: ", len(graph.edges))
-
-        try: 
+        # Complete node embeddings before saving the reusable checkpoint.
+        try:
             graph.node_embedding_insertion()
+        except Exception as e:
+            print(f"✗ Error inserting node embeddings: {e}")
+            traceback.print_exc()
+
+        pbar.set_postfix_str("appearances")
+        pbar.update(1)
+
+        # --------------------------------
+        # Pre-abstraction checkpoint
+        # --------------------------------
+        # This checkpoint lets ablations rerun abstraction without the MLLM.
+        try:
+            checkpoint_path = Path(f"data/graphs/{video_name}_preabstraction.pkl")
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(checkpoint_path, "wb") as f:
+                pickle.dump(graph, f)
+            print(f"✓ Saved pre-abstraction checkpoint to {checkpoint_path}")
+        except Exception as e:
+            print(f"✗ Error saving pre-abstraction checkpoint: {e}")
+            traceback.print_exc()
+
+        # --------------------------------
+        # Abstract Memory (incremental + final)
+        # --------------------------------
+        from utils.abstraction_config import AbstractionConfig
+        print("Running threshold-based abstraction...")
+        print("Number of edges before abstraction: ", len(graph.edges))
+        try:
+            abs_tokens = graph.run_abstraction(AbstractionConfig())
+            add_stage_usage(
+                stage_usage,
+                "attributes",
+                abs_tokens.get(
+                    "attributes_usage",
+                    abs_tokens.get("attributes_tokens", 0),
+                ),
+            )
+            add_stage_usage(
+                stage_usage,
+                "relationships",
+                abs_tokens.get(
+                    "relationships_usage",
+                    abs_tokens.get("relationships_tokens", 0),
+                ),
+            )
+        except Exception as e:
+            print(f"✗ Error during run_abstraction: {e}")
+            traceback.print_exc()
+        print("Abstraction complete.")
+        print("Number of edges: ", len(graph.edges))
+
+        pbar.set_postfix_str("abstraction")
+        pbar.update(1)
+
+        try:
             graph.insert_high_level_and_appearance_embeddings()
         except Exception as e:
             print(f"✗ Error inserting embeddings: {e}")
             traceback.print_exc()
+
+        pbar.set_postfix_str("save")
+        pbar.update(1)
     except Exception as e:
         print(f"✗ Error during memorization for {video_name}: {e}")
         traceback.print_exc()
+    finally:
+        pbar.close()
 
-    # Save the graph to a file
     output_graph_path = Path(output_graph_path)
     output_graph_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_graph_path, "wb") as f:
         pickle.dump(graph, f)
 
-    # Save the episodic memory and token summaries to a JSON file
     output_json_path = Path(output_json_path)
     output_json_path.parent.mkdir(parents=True, exist_ok=True)
-    token_summaries["total"] = int(sum(v for v in token_summaries.values()))
+    token_summaries = build_token_summary(stage_usage)
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump({"memory_token_summaries": token_summaries, "episodic_memory": episodic_memory}, f, indent=2)
     print(f"\n✓ Saved episodic memory and token summaries for {video_name} to {output_json_path}")
@@ -245,35 +276,37 @@ def process_full_video(video_name):
 
 
 def main():
-    # Example usage: python process_full_video.py meeting_room_03
+    real_stdout = sys.stdout
+    Path("data/logs").mkdir(parents=True, exist_ok=True)
 
-    original_stdout = sys.stdout
-    log_file = open("log.txt", "w", encoding="utf-8")
-    sys.stdout = Tee(log_file)
-    
     if len(sys.argv) < 2: # If no video names are provided, process all videos
         video_names = load_video_list()
     else:
         video_names = sys.argv[1:]
 
     for video_name in video_names:
+        log_path = Path(f"data/logs/{video_name}_memo.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "w", encoding="utf-8")
+        sys.stdout = Tee(log_file) if verbose_terminal() else QuietStdout(log_file)
+        start_time = time.time()
         try:
-            start_time = time.time()
-            print(f"\nProcessing {video_name}...")
             graph, episodic_memory, token_summaries = process_full_video(video_name)
-            print(f"✓ {video_name} complete. Graph has {len(graph.characters)} characters and {len(graph.edges)} edges.")
-            print(f"Token summaries: {token_summaries}")
-            end_time = time.time()
-            print(f"Time taken: {end_time - start_time} seconds")
         except Exception as e:
-            print(f"✗ Error processing video {video_name}: {e}")
+            sys.stdout = real_stdout
+            log_file.close()
+            print(f"✗ [{video_name}] memo failed: {e}")
             traceback.print_exc()
-            print("Continuing to next video...")
             continue
-    
-    sys.stdout = original_stdout
-    log_file.close()
+        elapsed = time.time() - start_time
+        sys.stdout = real_stdout
+        log_file.close()
+        total_tokens = token_summaries.get("total", 0)
+        print(
+            f"✓ [{video_name}] memo {elapsed:.0f}s | "
+            f"clips={len(episodic_memory)} edges={len(graph.edges)} chars={len(graph.characters)} | "
+            f"tokens={total_tokens}"
+        )
 
 if __name__ == "__main__":
     main()
-

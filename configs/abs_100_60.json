@@ -1,0 +1,7 @@
+{
+  "incremental_enabled": true,
+  "interval_node": 100,
+  "interval_pair": 60,
+  "final_lower_bound_node": 10,
+  "final_lower_bound_pair": 3
+}

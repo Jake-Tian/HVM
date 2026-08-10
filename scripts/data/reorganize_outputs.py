@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_json(path):
@@ -67,9 +67,9 @@ def main():
     episodic_memory, memorization_tokens = collect_memorization("data/memorization")
     reason_summary = collect_reasoning("data/reasoning")
 
-    episodic_path = "data/episodic_memory.json"
-    reason_path = "data/reason_summary.json"
-    tokens_path = "data/memorization_tokens.json"
+    episodic_path = "data/episodic_memory/episodic_memory.json"
+    reason_path = "data/reason_summaries/reason_summary.json"
+    tokens_path = "data/analysis/memorization_tokens.json"
 
     write_json(episodic_path, episodic_memory)
     write_json(reason_path, reason_summary)

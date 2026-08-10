@@ -4,6 +4,24 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and credentials
+.env
+.env.*
+!.env.example
+
+# Local model adapters containing private credentials
+/utils/llm_qwen.py
+/utils/mllm_qwen.py
+/utils/mllm_gemini.py
+
+# NFS temporary files
+.nfs*
 
 # Data file
 data/*
@@ -36,6 +54,7 @@ log.txt
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 
@@ -46,3 +65,7 @@ Thumbs.db
 # local scripts
 test.sh
 test.log
+
+# Local agent instructions and scratch archives
+/AGENTS.md
+/tmp/

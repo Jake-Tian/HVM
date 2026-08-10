@@ -1,7 +1,8 @@
 import numpy as np
+import os
 import sys
 from pathlib import Path
-from utils.llm import get_embedding
+from utils.embedding import get_embedding
 
 
 class Tee:
@@ -19,6 +20,28 @@ class Tee:
     def flush(self):
         self.file.flush()
         self.stdout.flush()
+
+
+class QuietStdout:
+    """Redirect stdout to a file only (terminal stays quiet).
+
+    tqdm writes to stderr by default, so progress bars remain visible in the
+    terminal while all `print(...)` output is captured to the log file.
+    """
+    def __init__(self, file):
+        self.file = file
+
+    def write(self, text):
+        self.file.write(text)
+        self.file.flush()
+
+    def flush(self):
+        self.file.flush()
+
+
+def verbose_terminal() -> bool:
+    """HVM_VERBOSE=1 restores the old verbose terminal output (Tee to both)."""
+    return os.environ.get("HVM_VERBOSE", "0") == "1"
 
 def strip_code_fences(text) -> str:
     """
@@ -128,6 +151,8 @@ def find_pkl_files(graph_dir="data/graphs"):
     if not graph_path.exists():
         return []
 
-    pkl_files = sorted(graph_path.glob("*.pkl"))
+    pkl_files = sorted(
+        path for path in graph_path.glob("*.pkl")
+        if not path.stem.endswith("_preabstraction")
+    )
     return [f.stem for f in pkl_files]
-

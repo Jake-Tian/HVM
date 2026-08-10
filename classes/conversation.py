@@ -35,7 +35,7 @@ class Conversation:
         if not messages:
             return
         
-        from utils.llm import get_embedding
+        from utils.embedding import get_embedding
         
         existing_messages = set()
         for msg in self.messages:

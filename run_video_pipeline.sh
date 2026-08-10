@@ -11,16 +11,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
+mkdir -p data/logs
 
 # Step 0: Ensure required data folder exists (data/ is gitignored)
-echo "Preparing shared data folder..."
-if python3 preprocessing/download_hf_folder.py; then
-  echo "✓ Subtitles downloaded"
-else
-  echo "✗ Failed to download subtitles"
-  exit 1
-fi
-echo ""
+# echo "Preparing shared data folder..."
+# if python3 preprocessing/download_hf_folder.py; then
+#   echo "✓ Subtitles downloaded"
+# else
+#   echo "✗ Failed to download subtitles"
+#   exit 1
+# fi
+# echo ""
 
 # Number of videos to process in parallel (set to 1 for sequential)
 MAX_PARALLEL_JOBS="${MAX_PARALLEL_JOBS:-4}"
@@ -37,50 +38,45 @@ process_one_video() {
 
   echo ""
   echo "[$(date +%H:%M:%S)] Processing video: ${video}"
-  echo "============================================================"
 
   # Step 1: Download video
-  if ! python3 preprocessing/download_hf_videos.py "$video"; then
-    echo "✗ [${video}] Download failed"
-    cleanup_video "$video"
-    return 1
-  fi
+  # if ! python3 preprocessing/download_hf_videos.py "$video"; then
+  #   echo "✗ [${video}] Download failed"
+  #   # cleanup_video "$video"
+  #   return 1
+  # fi
 
   # Step 2: Add subtitles + extract frames
-  if [[ ! -f "data/subtitles/robot/${video}.srt" ]]; then
-    echo "✗ [${video}] Subtitle file missing: data/subtitles/robot/${video}.srt"
-    cleanup_video "$video"
-    return 1
-  fi
+  # if [[ ! -f "data/subtitles/robot/${video}.srt" ]]; then
+  #   echo "✗ [${video}] Subtitle file missing: data/subtitles/robot/${video}.srt"
+  #   # cleanup_video "$video"
+  #   return 1
+  # fi
 
-  if ! python3 preprocessing/add_subtitles_and_extract_frames.py "$video"; then
-    echo "✗ [${video}] Frame extraction failed"
-    cleanup_video "$video"
-    return 1
-  fi
+  # if ! python3 preprocessing/add_subtitles_and_extract_frames.py "$video"; then
+  #   echo "✗ [${video}] Frame extraction failed"
+  #   # cleanup_video "$video"
+  #   return 1
+  # fi
 
-  # Step 3: Build graph memory
-  if python3 process_full_video.py "$video"; then
-    echo "✓ [${video}] Graph memory built"
-  else
+  # Step 3: Build graph memory (Python prints its own tqdm bar + summary line)
+  if ! python3 process_full_video.py "$video"; then
     echo "✗ [${video}] Graph memory building failed"
-    cleanup_video "$video"
+    # cleanup_video "$video"
     return 1
   fi
 
-  # Step 4: Answer questions with reason.py
-  if python3 reason.py "$video"; then
-    echo "✓ [${video}] Reasoning complete"
-  else
+  # Step 4: Answer questions with reason.py (Python prints its own tqdm bar + summary line)
+  if ! python3 reason.py "$video"; then
     echo "✗ [${video}] Reasoning failed"
-    cleanup_video "$video"
+    # cleanup_video "$video"
     return 1
   fi
 
   # Step 5: Cleanup to free storage
-  cleanup_video "$video"
-  echo "✓ [${video}] Done (cleaned up)"
-  return 0
+  # cleanup_video "$video"
+  # echo "✓ [${video}] Done (cleaned up)"
+  # return 0
 }
 
 if [[ "$#" -gt 0 ]]; then

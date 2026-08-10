@@ -4,8 +4,8 @@ import glob
 import sys
 import traceback
 from pathlib import Path
-from utils.llm import generate_text_response
-from utils.mllm_gpt import generate_messages, get_response
+from utils.llm_qwen import generate_text_response
+from utils.mllm_qwen import generate_messages, get_response
 from utils.prompts import prompt_parse_query, prompt_parse_query_k30, prompt_parse_query_no_allocation, prompt_graph_video, prompt_no_video_rewatch, prompt_video_answer, prompt_video_answer_final
 from classes.output_structure import ParseQueryOutput, ParseQueryOutputNoAllocation, GraphOutputFormat, VideoOutputFormat
 from utils.search import search_with_parse

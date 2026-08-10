@@ -40,6 +40,8 @@ Your tasks:
 
 4. **Scene**: Use one word or phrase to describe the scene in the current video (eg. "bedroom", "gym", "office", etc.).
 
+# All the above information should be provided in JSON format.
+
 ## Character Naming Rules:
 - Use angle brackets to represent characters (eg. <Alice>, <Bob>, <robot>, <character_1> etc.) in behaviors, conversation, and character appearance.
 - Include the robot (<robot>) if present:
@@ -69,152 +71,31 @@ Additional Rules:
 
 
 prompt_extract_triples = """
-You are given a list of **action sentences** describing character behavior.  
-Convert each sentence into **triples** of the form:
+Convert a JSON array of action sentences into structured triples:
+`{"triples": [{"source": ..., "content": ..., "target": ...}]}`.
 
-[source, content, target]
+Graph contract:
+- `source` and `target` are stable entity nodes. `content` is only the action or relation between them.
+- The affected object of an action must be the target, not part of `content`.
+  Correct: `{"source": "<Alice>", "content": "takes", "target": "towel"}`.
+  Wrong: `{"source": "<Alice>", "content": "takes towel", "target": "bag"}`.
+- Keep target names concise and reusable. Put relative spatial detail in `content`.
+  Example: "the pen is in the holder on the right side of the desk" becomes
+  `{"source": "pen", "content": "is in the holder on the right side of", "target": "desk"}`.
 
-Return **ONLY** a valid JSON array (list of lists).  
-No explanation. No markdown. No extra text.
-
-## OUTPUT FORMAT
-- Strict JSON only
-- Use double quotes
-- No trailing commas
-- Each triple must be:
-  [source, content, target]
-- Preserve the **original sentence order**
-- Preserve the **original action order** within each sentence
-
-## DEFINITIONS
-- **Source**: the entity performing the action or whose state is described
-- **Content**: the action, relation, or state (verb-centered)
-- **Target**: the entity the action is applied to or related to  
-  Use `null` if none exists
-
-## EXTRACTION PRIORITY (FOLLOW IN ORDER)
-
-1. Identify actors (sources)
-2. Identify actions / relations (content)
-3. Identify affected entities (targets)
-4. Resolve pronouns and possessives
-5. Split compound structures
-6. Normalize verbs
-7. Add state relations
-8. Deduplicate implied redundancy
-
-## RULES: 
-
-1. SOURCE & TARGET (ENTITIES)
-- May be:
-  - Characters (use verbatim names with angle brackets)
-  - Objects (nouns, physical or abstract)
-- **Character/Object format rule (STRICT)**:
-  - Characters: must keep angle brackets, e.g. `<Alice>`, `<robot>`, `<character_1>`.
-  - Objects: must **NOT** use angle brackets.
-  - If an object appears with angle brackets in input, remove them in output.
-- Copy entity names **verbatim** (except removing angle brackets from objects)
-- Use `null` if no target exists
-- Do **not** invent entities
-
-2. CONTENT (VERBS / RELATIONS)
-- Use **simple present tense** only  
-  Examples: walks, puts, looks at
-- Avoid progressive or continuous forms  
-  is walking → walks
-- Include relevant prepositions or direction
-  - turns left
-  - looks at
-  - moves forward
-- Include adverbs when present
-  - runs quickly
-  - smiles happily
-
-3. BODY PART MERGING
-- Merge body parts into the verb
-- Do NOT create body-part objects
-Examples:
-- "<Alice> hits <Bob>'s head" → ["<Alice>", "hits head", "<Bob>"]
-- "<Emma> touches <David>'s shoulder" → ["<Emma>", "touches shoulder", "<David>"]
-
-4. COMMUNICATION ACTIONS
-- Encode communication directly
-- Do NOT create abstract objects (e.g., "question", "message")
-Examples:
-- "<Tom> asks <Mary>" → ["<Tom>", "asks", "<Mary>"]
-- "<Lisa> greets <John>" → ["<Lisa>", "greets", "<John>"]
-
-5. OBJECT HANDLING
-- Objects are nouns
-- NEVER wrap object nodes with angle brackets (`< >`)
-- Singularize plurals  
-  books → book
-- Keep adjectives attached to the object  
-  eg. "red cup"
-- Keep named objects verbatim  
-  eg. "bottle of Nescafe"
-- Split compound objects into separate triples
-  eg. "<Alice> picks up the book and the pen" → ["<Alice>", "picks up", "book"], ["<Alice>", "picks up", "pen"]
-
-6. PRONOUN & POSSESSIVE RESOLUTION
-- NEVER use pronouns (his, her, their)
-- Replace possessives with explicit ownership:
-  - his wallet → John's wallet
-- Default ownership to the **nearest subject** if ambiguous
-
-7. MULTIPLE RELATIONS
-- Multiple subjects: Each subject gets its own triple
-  eg. "<Alice> and <Bob> exit" → ["<Alice>", "exit", null], ["<Bob>", "exit", null]
-- Multiple verbs: Each verb becomes a separate triple
-  eg. "<Lisa> dances and sings" → ["<Lisa>", "dances", null], ["<Lisa>", "sings", null]
-- Multiple objects: Each object becomes a separate triple
-
-8. STATE REPRESENTATION
-- If an action implies a **resulting state**, add a state triple.
-- For location/spatial relations, put location information in the **content** field and keep
-  source/target as clean entities (character or noun). Do NOT put long location phrases in target.
-Examples:
-- "<robot> puts coffee on table" → ["<robot>", "puts", "coffee"], ["coffee", "is on", "table"]
-- "<Alice> takes towel from Susan's bag" → ["<Alice>", "takes", "towel"], ["towel", "is in", "Susan's bag"]
-- "<Betty> sits on the right side of the sofa" → ["<Betty>", "sits on the right side of", "sofa"]
-
-9. INFORMATION CONSISTENCY
-- Ensure there is no information loss when converting the sentence into triples. Do NOT remove any adjectives, adverbs, or other modifiers.
-
-10. DEDUPLICATION
-- Keep only **distinct, meaningful** actions
-- Do NOT duplicate states already implied by a stronger action
-- Redistribution of information across triples is allowed
-
-11. FALLBACK RULE
-If unsure, output a **minimal transformation**:
-[source, verb, target]
-
-## EXAMPLE: 
-Input:
-[
-  "<Michael> pats <Susan>'s shoulder and smiles.",
-  "<robot> places the red cup on the counter.",
-  "<Lisa> dances and sings happily.",
-  "<John> takes his wallet and keys from the drawer.", 
-  "<Betty> carries a red plastic bag in her left hand and a white plastic bag in her right hand."
-]
-
-Output:
-[
-  ["<Michael>", "pats shoulder", "<Susan>"],
-  ["<Michael>", "smiles", null],
-  ["<robot>", "places", "red cup"],
-  ["red cup", "is on", "counter"],
-  ["<Lisa>", "dances happily", null],
-  ["<Lisa>", "sings happily", null],
-  ["<John>", "takes", "John's wallet"],
-  ["<John>", "takes", "John's key"], 
-  ["<Betty>", "carries in left hand", "red plastic bag"],
-  ["<Betty>", "carries in right hand", "white plastic bag"]
-]
-
-Now convert the following list of action sentences into triples:
+Extraction rules:
+- Preserve sentence order and action order. Split distinct actors, actions, or objects into separate triples.
+- Characters keep angle brackets, such as `<Alice>` and `<robot>`. Objects never use angle brackets.
+- Use simple-present, verb-centered relations. Preserve modifiers, ownership, direction, and hierarchical location details.
+- Resolve pronouns to explicit entity names. Do not invent entities or facts. Keep only distinct facts.
+- For placement, emit both the action and resulting state. "<robot> puts coffee on the table" becomes
+  `{"source": "<robot>", "content": "puts", "target": "coffee"}` and
+  `{"source": "coffee", "content": "is on", "target": "table"}`.
+- For retrieval, emit both the action and source relation, but never claim that the object remains there.
+  "<Alice> takes towel from Susan's bag" becomes
+  `{"source": "<Alice>", "content": "takes", "target": "towel"}` and
+  `{"source": "towel", "content": "is taken from", "target": "Susan's bag"}`.
+- Use a null target only when an action truly has no affected or related entity.
 """
 
 
@@ -278,6 +159,7 @@ If the confidence score is less than 50, you should not include the relationship
 It is acceptable to only generate a few relationships if you don't have enough information.
 
 Output a JSON array (list of lists). 
+**CRITICAL**: Ensure the output starts with `[` and ends with `]`, and contains all relationship lists within this single outer array.
 Each list contains four elements: [character1, relationship, character2, confidence score]. 
 Example: [["<Alice>", "is friend with", "<Bob>", 90], ["<Alice>", "is teacher of", "<Charlie>", 80], ["<Charlie>", "respects", "<Alice>", 70]]
 """
@@ -288,11 +170,25 @@ You are given a conversation between several characters.
 
 Your tasks: 
 
+### OUTPUT FORMAT
+Return a JSON object with the following keys:
+1. "summary": A string summarizing the key topics, decisions, or outcomes (2-4 concise sentences).
+2. "character_attributes": A list of [character, attribute, confidence_score] triplets.
+3. "characters_relationships": A list of [character1, relationship, character2, confidence_score] quadruplets.
+
+Example:
+{
+  "summary": "Alice and Bob discussed their upcoming project. They agreed on a timeline and assigned tasks.",
+  "character_attributes": [["<Alice>", "organized", 85], ["<Bob>", "cautious", 70]],
+  "characters_relationships": [["<Alice>", "is friend with", "<Bob>", 90]]
+}
+
+### DETAILED INSTRUCTIONS
+
 1. **Summary**
 - Summarize the key topics, decisions, or outcomes discussed in the conversation.
 - Write 2-4 concise sentences covering the main themes and important points.
 - Focus on what was discussed and decided, not on individual statements.
-- Output format: string
 - Example: "Alice and Bob discussed their upcoming project. They agreed on a timeline and assigned tasks. Bob expressed concerns about the deadline, which Alice addressed by suggesting additional resources."
 
 2. **Character Attributes**
@@ -334,7 +230,7 @@ Your tasks:
 - If conversation is empty or unclear: return empty arrays for attributes and relationships, provide a brief summary noting the issue.
 - If character names are ambiguous: use the names as provided in the conversation.
 
-Now summarize the following conversation:
+Now summarize the following conversation in JSON format:
 """
 
 
@@ -368,7 +264,7 @@ You are a query parser for a knowledge graph system that stores video informatio
 
 ## YOUR TASK
 
-Given a query and budget `k=50`, output:
+Given a query and budget `k=50`, output in JSON format:
 
 1. **Query triple(s)**: Output **`query_triples`** as a list of 1 to 3 triples.
    - Triple format: `[source, content, target, source_weight, content_weight, target_weight]`
@@ -385,6 +281,8 @@ Given a query and budget `k=50`, output:
 - **Low (0.1-0.4)**: What we're searching for - question marks ("?"), relationship terms ("relationship", "friendship"), unknown actions - use 0.2-0.4 for search targets, 0.1-0.2 for vague terms
 
 **Special Rules for Location Queries**:
+- **Object-first weighting is mandatory**: If the question centers on a concrete object, give that object's source or target weight `0.9-1.0`. Unknown actors, unknown locations, and generic relation words must not outweigh the object.
+- **Cover both states and transitions**: When useful, emit one state triple such as `[X, "is at", "?", 1.0, 0.3, 0.0]` and one transition triple such as `["?", "puts or moves", X, 0.0, 0.3, 1.0]`. This lets retrieval find both explicit locations and the action that created the state.
 - **Preserve hierarchical locations**: When parsing location queries, keep complete hierarchical location phrases as single entities in target fields (e.g., "cabinet on the left side of the wardrobe", "cabinet below the dressing table", "table on the right of the water dispenser"). Do NOT split them into separate components.
 - **Temporal-spatial queries**: 
   - "where is X now?" → Use triple `[X, "is at", "?", ...]` with high weight on X. The search should prioritize the most recent state edges (highest clip_id).
@@ -461,7 +359,10 @@ ParseQueryOutput(
 
 **Example 5**: "where is the tape now?"
 ParseQueryOutput(
-  query_triples=[["tape", "is at", "?", 0.8, 0.5, 0.15]],
+  query_triples=[
+    ["tape", "is at", "?", 1.0, 0.3, 0.0],
+    ["?", "puts or moves", "tape", 0.0, 0.3, 1.0]
+  ],
   spatial_constraint=None,
   speaker_strict=None,
   allocation=ParseQueryAllocation(
@@ -470,7 +371,7 @@ ParseQueryOutput(
   )
 )
 
-Now parse the following query and allocate k=50:
+Now parse the following query and allocate k=50 in JSON format:
 """
 
 
@@ -500,7 +401,7 @@ You are a query parser for a knowledge graph system that stores video informatio
 
 ## YOUR TASK
 
-Given a query and budget `k=30`, output:
+Given a query and budget `k=30`, output the following in JSON format:
 
 1. **Query triple(s)**: Output **`query_triples`** as a list of 1 to 3 triples.
    - Triple format: `[source, content, target, source_weight, content_weight, target_weight]`
@@ -602,7 +503,7 @@ ParseQueryOutput(
   )
 )
 
-Now parse the following query and allocate k=30:
+Now parse the following query and allocate k=30 in JSON format:
 """
 
 
@@ -611,7 +512,7 @@ You are a query parser for a knowledge graph system that stores video informatio
 
 ## YOUR TASK
 
-Given a query, output:
+Given a query, output the following in JSON format:
 
 1. **Query triple(s)**: Output **`query_triples`** as a list of 1 to 3 triples.
    - Triple format: `[source, content, target, source_weight, content_weight, target_weight]`
@@ -655,7 +556,7 @@ query_triples=[
   ["?", "is on", "dressing table", 0.2, 0.4, 0.4]
 ] spatial_constraint=None speaker_strict=None
 
-Now parse the following query:
+Now parse the following query in JSON format:
 """
 
 
@@ -714,7 +615,7 @@ Input format:
   Applies to both low-level actions and conversation messages.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
 
-Output should include: 
+Output should include the following in JSON format: 
 1. answer: True or False
 2. content: <your answer here> or [clip_id1, clip_id2, ...]
 3. summary: <only present when answer is False - summary of extracted information from the graph>
@@ -843,7 +744,7 @@ Input format:
   Applies to both low-level actions and conversation messages.
   Example: [1] Anna walk. (ping-pong room) means this occurred during clip 1 (0-30 seconds).
 
-Output should include: 
+Output should include the following in JSON format: 
 1. answer: True or False
 2. content: <your answer here> or [clip_id1, clip_id2, ...]
 3. summary: <only present when answer is False - summary of extracted information from the graph>
@@ -972,7 +873,7 @@ Your task is to evaluate whether the current video clip (combined with any previ
    - The video shows partial information but key details are still missing after considering previous summaries
 - **REQUIRED**: For counting questions, you MUST continue searching for all clips except the last clip. See "SPECIAL QUESTION TYPES" below.
 
-Output should include: 
+Output should include the following in JSON format: 
 1. answer: True or False
 2. content: <your answer here> or [clip_id1, clip_id2, ...]
 3. summary: <only present when answer is False - summary of extracted information from the current video>
@@ -1135,3 +1036,97 @@ Input:
 	•	agent_answer: {agent_answer}
 
 Output ('Yes' or 'No'):"""
+
+
+# ----------------------------------------------------------------------------
+# LangGraph agent prompts (planner / executor / verifier / final_answer)
+# Adapted from HVM-web for HVM's robot entity-centric, open-ended QA setting.
+# ----------------------------------------------------------------------------
+
+prompt_planner_system = """You are a strategic Planner answering questions about a long entity-centric video. You have access to tools that search the video's heterogeneous memory graph. Raw clip rewatch is available only for location questions. You have {budget} turns left to gather evidence. Think step-by-step: analyze what you know, what is missing, and which tool is best to fill the gap. Then, call EXACTLY ONE tool to gather missing information. Once you have sufficient evidence to confidently answer the user's question, call complete_task.
+
+The system processes video information in three layers:
+1. **Video**: Videos are split into 30-second segments, each assigned a unique clip_id (1, 2, 3, ...).
+2. **Text**: Each segment's text descriptions (behaviors, conversations, scenes) are stored by clip_id.
+3. **Graph**: Text is converted into graph edges with different types:
+   - **High-level** : Abstract character attributes and relationships (clip_id=0).
+   - **Appearance** : Character physical looks, hair, clothing.
+   - **Low-level** : Specific actions/states with temporal and spatial information (clip_id>0).
+   - **Conversations** : Dialogue transcripts as [speaker, text] pairs.
+   Each edge's clip_id links back to its original video segment.
+
+Input format in the evidence:
+- **Parentheses (X)**: Confidence scores (0-100) in high-level information, indicating reliability.
+- **Square brackets [X]**: Clip IDs indicating timestamps. Each clip = 30 seconds: clip 1 = 0-30s, clip 2 = 30-60s, etc.
+  Example: [1] robot walk to table. (living room) means this occurred during clip 1.
+- **Angle brackets <X>**: Character nodes (e.g., <robot>, <Alice>). Objects are plain text.
+
+## Evidence Memory
+End each response with one short `Findings so far:` line. Keep only confirmed facts relevant to the question, include clip IDs, and carry earlier confirmed facts forward.
+
+{graph_stats}"""
+
+prompt_planner_strategy = """## Strategy
+1. Preserve every entity, qualifier, temporal condition, and requested detail in the question.
+2. Start with one broad `general_search`. Never use more than two `general_search` calls or repeat a query with minor wording changes.
+3. Use `search_temporal_context` only when a candidate event needs nearby actions or dialogue.
+4. Before completing, check that the proposed answer fully addresses the question, is directly supported, and is not contradicted by collected evidence. Stop when it is supported.
+
+Call EXACTLY ONE tool."""
+
+prompt_planner_strategy_location = """## Location Workflow
+Goal: reconstruct the requested state of one exact object.
+1. Preserve the complete target phrase and infer the requested temporal state from the question. Do not substitute a related object or the latest mention.
+2. Use `general_search` for that target and state. Call `search_object_events` only when an ordered object timeline would add information beyond the search results.
+3. Use `search_temporal_context` only when the strongest event needs surrounding actions or dialogue.
+4. If an object timeline identifies a visual ambiguity, use `watch_video_clip` only on a validated candidate clip with a focus that names the target and unresolved distinction.
+5. Stop when one state-consistent location is supported and answer with the necessary spatial hierarchy.
+
+Keep one short location timeline in `Findings so far:` with `[clip] location | source/destination/current`.
+Call EXACTLY ONE tool."""
+
+prompt_planner_strategy_event_location = """## Event Location Workflow
+Goal: identify where an action or event happened, not track an object's state.
+1. Start with one `general_search` for the actor, action, and possible scene or furniture.
+2. Use `search_temporal_context` when nearby evidence is needed to verify the event or its scene.
+3. Do not call `search_object_events` or `watch_video_clip`; there is no target object timeline to reconstruct.
+4. Call `complete_task` once one event-consistent location is supported.
+
+Call EXACTLY ONE tool."""
+
+prompt_planner_strategy_action_frequency = """## Action Frequency Workflow
+An intermediate memory is a working summary of the counting unit, candidate
+events, merged duplicates, and current total. It is not authoritative when it
+conflicts with explicit evidence.
+1. Before interpreting evidence, define one completed occurrence of the target action as the `counting_unit`.
+2. Search the exact action once. If it returns too few or zero candidates, use one object-only `general_search` to find clips where the object is handled. Never use a third general search.
+3. Use `search_temporal_context` on candidate clips so the intermediate memory can separate completed episodes from setup steps and merge repeated graph descriptions across adjacent clips.
+4. If graph evidence does not show repetitions inside a candidate episode, use `search_action_evidence` when its raw descriptions or dialogue can resolve the count.
+5. Set each confirmed event's `occurrence_count` to the number of completed counting units inside it. One event may contribute more than one occurrence.
+6. Classify ledger events as `confirmed`, `rejected`, `merged`, or unresolved `candidate` according to the available evidence.
+7. Count a new episode only after a reset, clear stop and restart, new actor, or later independent episode. Do not count preparation or repeated captions twice, but preserve explicit multiplicity within an episode.
+8. Never infer zero solely because retrieval returned no matching event. Complete when the collected evidence supports the best available count, reconciling the ledger with explicit evidence.
+
+Call EXACTLY ONE tool."""
+
+prompt_answer_with_search_results_final = """## FINAL ROUND
+You have exhausted your search budget. You MUST NOT call any more tools. Based on ALL the evidence collected in the conversation history, reason about the question and provide your best answer now. If the evidence is incomplete, make the most reasonable guess based on what you have.
+
+Before answering, update the short `Findings so far:` line. Preserve every distinct supported answer when the question requires multiple details. Then call `complete_task`."""
+
+prompt_answer_with_search_results_final_location = """In the final findings, choose the location matching the requested time/state. Do not merge alternative object nodes. Preserve every supported level of spatial detail needed to identify the location."""
+
+prompt_answer_with_search_results_final_action_frequency = """Use the action-frequency memory as a working summary and reconcile it with explicit evidence. Count completed occurrences, merge duplicate descriptions and continuous actions, and never infer zero only from missing retrieval results."""
+
+prompt_final_answer = """You are the Final Answer synthesizer. Using all the collected evidence in the conversation history, provide a concise, direct answer to the original question. Respond in exactly ONE SENTENCE. Do NOT include explanations, meta-commentary, or justifications.
+
+**IMPORTANT**:
+- Answers like "I don't know", "The information is not sufficient", or "It is unclear" are STRICTLY FORBIDDEN.
+- If you are uncertain, you MUST make the most reasonable guess based on the available evidence in the history.
+- Reuse exact terms from the question and search results.
+- If multiple distinct answers are supported, include all of them rather than selecting only one.
+- For yes/no questions, start with Yes or No."""
+
+prompt_final_answer_location = """For this location question, answer with the location matching the requested time/state and preserve the most specific supported spatial hierarchy."""
+
+prompt_final_answer_action_frequency = """Use the action-frequency memory as a working summary, but reconcile it with explicit evidence before giving the final count. Missing retrieval results alone do not support an answer of zero."""

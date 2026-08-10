@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from utils.llm import generate_text_response
+from utils.llm_qwen import generate_text_response
 from utils.prompts import prompt_summary
 from utils.general import strip_code_fences
 
