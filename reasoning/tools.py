@@ -1,7 +1,8 @@
 import glob
 from pathlib import Path
+from langchain_core.tools import tool
 
-from utils.llm import generate_text_response
+from utils.llm_gpt import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
 from utils.prompts import prompt_parse_query_no_allocation
 from classes.output_structure import ParseQueryOutputNoAllocation
@@ -111,9 +112,11 @@ def execute_search_temporal_context(graph, clip_id, window=1):
             result_sections.append(f"**Actions around clip {clip_id}:**\n" + ll_str)
             
     conv_lines = []
-    for cid, conv in graph.conversations.items():
-        if abs(conv.clip_id - clip_id) <= window:
-            conv_lines.append(f"Clip {conv.clip_id}:\n" + conv.format_messages())
+    for conv in graph.conversations.values():
+        # A conversation may span multiple clips; check any of them.
+        clips = getattr(conv, "clips", None) or [getattr(conv, "clip_id", None)]
+        if any(c is not None and abs(c - clip_id) <= window for c in clips):
+            conv_lines.append(f"Clip(s) {sorted(clips)}:\n" + conv.format_messages())
     if conv_lines:
         result_sections.append(f"**Conversations around clip {clip_id}:**\n" + "\n".join(conv_lines))
         
@@ -148,3 +151,45 @@ def execute_watch_video_clip(video_name, clip_id, focus):
             return str(response), (tokens or 0)
     except Exception as e:
         return f"Error watching video clip {clip_id}: {e}", 0
+
+def get_tools(graph, video_name):
+    @tool
+    def general_search(query: str, k_action: int, k_conversation: int, k_ocr: int, k_high_level: int, k_appearance: int):
+        """
+        General semantic search that covers conversation, action, and OCR information.
+        Use this FIRST for all questions to get a temporal anchor and find relevant clip_ids.
+        Allocate your budget (Total k <= 50) based on the primary modality of the question:
+          - k_action (0-30): Primary for behavior, actions, temporal sequence, or 'where is' queries.
+          - k_conversation (0-30): Primary for 'why', dialogue, or causal reasoning.
+          - k_ocr (0-30): Primary for text on signs, labels, or posters.
+          - k_high_level (0-15): Secondary for character traits or relationships.
+          - k_appearance (0-10): Use ONLY for physical looks, hair, or clothing. Set to 0 if irrelevant.
+        """
+        return execute_general_search(graph, query, k_action, k_conversation, k_ocr, k_high_level, k_appearance)
+
+    @tool
+    def search_temporal_context(clip_id: int):
+        """
+        Search what happened in and around a specific video clip (window=1). 
+        Use this ONLY after finding a candidate clip_id via general_search to see events right before or after it.
+        """
+        return execute_search_temporal_context(graph, clip_id)
+
+    @tool
+    def watch_video_clip(clip_id: int, focus: str):
+        """
+        Watch the raw video frames of a specific clip. 
+        Use this ONLY after finding a candidate clip_id via general_search. 
+        Mandatory for visual questions requiring high detail (e.g., specific placement of objects, visual state, exact counts) when the text graph is insufficient.
+        Provide a specific `focus` based on what is missing from the text. It is expensive.
+        """
+        return execute_watch_video_clip(video_name, clip_id, focus)
+    
+    @tool
+    def complete_task(ready: bool):
+        """
+        Call this tool when you have enough information to answer the question, or when you exhaust your budget.
+        """
+        return "Task marked complete. Proceeding to final verification."
+
+    return [general_search, search_temporal_context, watch_video_clip, complete_task]

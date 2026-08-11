@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from utils.llm import generate_text_response
+from utils.llm_gpt import generate_text_response
 from utils.prompts import prompt_summary
 from utils.general import strip_code_fences
 
@@ -85,4 +85,3 @@ if __name__ == "__main__":
         episodic_memory = json.load(f)
     summary = summarize_clips(episodic_memory, 1, 4)
     print(summary)
-

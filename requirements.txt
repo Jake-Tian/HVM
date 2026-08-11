@@ -8,6 +8,11 @@ tqdm>=4.66.0
 
 huggingface-hub>=0.20.0
 
+# LangGraph reasoning agent
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
 # Visualization (for visualization/visualize_graph_dedup.py, graph_to_html.py, graph_to_picture.py)
 # pyvis>=0.3.0
 # networkx>=3.0

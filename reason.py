@@ -1,16 +1,18 @@
 import pickle
 import json
-import glob
 import sys
+import time
 import traceback
 from pathlib import Path
+from tqdm import tqdm
 
 from langchain_core.messages import HumanMessage, AIMessage
 
-from utils.llm import generate_text_response
+from utils.llm_gpt import generate_text_response
 from utils.prompts import prompt_agent_verify_answer_referencing
-from utils.langgraph_helper import build_agent
-from utils.general import find_pkl_files, Tee
+from reasoning.agent import build_agent
+from utils.general import QuietStdout, Tee, find_pkl_files, verbose_terminal
+from reasoning.trace import build_tool_rounds
 
 def reason(graph, video_name, question):
     print("================================================")
@@ -37,14 +39,7 @@ def reason(graph, video_name, question):
             
     total_tokens = result_state.get("total_tokens", 0)
             
-    rounds = []
-    for msg in result_state["messages"]:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            for tc in msg.tool_calls:
-                rounds.append({
-                    "tool": tc["name"],
-                    "args": tc["args"]
-                })
+    rounds = build_tool_rounds(result_state["messages"])
                 
     if not final_ans:
         final_ans = "Could not determine the answer."
@@ -82,26 +77,49 @@ def evaluate_answer(question, ground_truth_answer, predicted_answer):
         print(f"Error evaluating answer: {e}. Defaulting to False.")
         return False, 0
 
-def main():
-    original_stdout = sys.stdout
-    log_file = open("log.txt", "w", encoding="utf-8")
-    sys.stdout = Tee(log_file)
 
-    if len(sys.argv) < 2:
-        available_videos = sorted(find_pkl_files())
-    else:
-        available_videos = sys.argv[1:]
+def load_incorrect_question_ids(result_path):
+    with open(result_path, "r", encoding="utf-8") as f:
+        results = json.load(f)
+    return {
+        question_id
+        for question_id, record in results.items()
+        if isinstance(record, dict)
+        and isinstance(record.get("reasoning"), dict)
+        and record["reasoning"].get("evaluate_correct") is False
+    }
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="HVM-web reasoning over graph memory.")
+    parser.add_argument("videos", nargs="*", help="Video names to process.")
+    parser.add_argument("--graph-dir", default="data/graphs")
+    parser.add_argument("--graph-suffix", default="", help="Suffix before .pkl, e.g. _preabstraction.")
+    parser.add_argument("--out-dir", default="data/reasoning")
+    parser.add_argument("--incorrect-only-from", default=None)
+    parser.add_argument("--log-tag", default="five_tools_luna")
+    args = parser.parse_args()
+
+    original_stdout = sys.stdout
+    Path("data/logs").mkdir(parents=True, exist_ok=True)
+
+    available_videos = (
+        args.videos
+        if args.videos
+        else sorted(find_pkl_files(
+            graph_dir=args.graph_dir,
+            graph_suffix=args.graph_suffix,
+        ))
+    )
 
     with open(f"data/web_100.json", "r", encoding="utf-8") as f:
         questions_data = json.load(f)
 
     for video_name in available_videos:
-        print("================================================")
-        print(f"Processing video {video_name}...")
-
-        output_json_path = Path(f"data/reasoning/{video_name}.json")
+        output_json_path = Path(args.out_dir) / f"{video_name}.json"
         output_json_path.parent.mkdir(parents=True, exist_ok=True)
-        graph_path = Path(f"data/graphs/{video_name}.pkl")
+        graph_path = Path(args.graph_dir) / f"{video_name}{args.graph_suffix}.pkl"
         if not graph_path.exists():
             print(f"Skipping {video_name}: graph not found at {graph_path}")
             continue
@@ -109,7 +127,24 @@ def main():
             graph = pickle.load(f)
 
         video_questions = questions_data.get(video_name, {}).get("qa_list", [])
+        if args.incorrect_only_from:
+            baseline_path = Path(args.incorrect_only_from) / f"{video_name}.json"
+            if not baseline_path.exists():
+                raise FileNotFoundError(f"Baseline reasoning result not found: {baseline_path}")
+            incorrect_ids = load_incorrect_question_ids(baseline_path)
+            video_questions = [
+                question for question in video_questions
+                if question.get("question_id") in incorrect_ids
+            ]
+
         reasoning_results = {}
+
+        log_tag = Path(args.log_tag).name
+        log_path = Path("data/logs") / f"{video_name}_reason_{log_tag}.log"
+        log_file = open(log_path, "w", encoding="utf-8")
+        sys.stdout = Tee(log_file) if verbose_terminal() else QuietStdout(log_file)
+        pbar = tqdm(total=len(video_questions), desc=f"reason {video_name}", file=sys.stderr)
+        start_time = time.time()
 
         for video_question in video_questions:
             question_id = video_question.get("question_id")
@@ -135,6 +170,7 @@ def main():
             except Exception as e:
                 print(f"Error processing question {question_id}: {e}")
                 traceback.print_exc()
+
                 main_result = {
                     "error": str(e),
                     "evaluate_correct": False,
@@ -150,12 +186,22 @@ def main():
                 "type": video_question.get("type"),
             }
 
-        with open(output_json_path, "w") as f:
-            json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
-        print(f"\n✓ Saved reasoning results for {video_name} to {output_json_path}")
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
+
+            pbar.set_postfix_str(f"q{question_id}")
+            pbar.update(1)
+
+        pbar.close()
+        elapsed = time.time() - start_time
+        sys.stdout = original_stdout
+        log_file.close()
+        print(
+            f"✓ [{video_name}] reasoning {elapsed:.0f}s | "
+            f"questions={len(reasoning_results)} | output={output_json_path}"
+        )
 
     sys.stdout = original_stdout
-    log_file.close()
 
 if __name__ == "__main__":
     main()

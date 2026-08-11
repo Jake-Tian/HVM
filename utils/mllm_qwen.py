@@ -1,4 +1,4 @@
-"""Multimodal LLM via OpenAI GPT."""
+"""Multimodal LLM via Qwen-VL's OpenAI-compatible endpoint."""
 
 import base64
 from pathlib import Path
@@ -6,12 +6,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from utils.llm_gpt import MODEL, _client
+from utils.llm_qwen import _client
+
+MODEL = "qwen3-vl-flash"
 
 
 def get_response(messages, text_format=None):
     client = _client()
-    kwargs = {"model": MODEL, "messages": messages}
+    kwargs = {
+        "model": MODEL,
+        "messages": messages,
+        "extra_body": {"enable_thinking": False},
+    }
     if text_format is None:
         response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content, response.usage.total_tokens

@@ -1,8 +1,10 @@
 import numpy as np
+import os
 import sys
 import re
+import json
 from pathlib import Path
-from utils.llm import get_embedding
+from utils.embedding import get_embedding
 
 
 class Tee:
@@ -20,6 +22,26 @@ class Tee:
     def flush(self):
         self.file.flush()
         self.stdout.flush()
+
+
+class QuietStdout:
+    """Write pipeline details to a log without flooding the terminal."""
+
+    def __init__(self, file):
+        self.file = file
+
+    def write(self, text):
+        self.file.write(text)
+        self.file.flush()
+
+    def flush(self):
+        self.file.flush()
+
+
+def verbose_terminal() -> bool:
+    """Set HVM_VERBOSE=1 to mirror detailed logs to the terminal."""
+    return os.environ.get("HVM_VERBOSE", "0") == "1"
+
 
 def strip_code_fences(text) -> str:
     """
@@ -112,12 +134,13 @@ def merge_character_appearances(characters_appearance, appearance_dict, similari
     return equivalence_list
 
 
-def find_pkl_files(graph_dir="data/graphs"):
+def find_pkl_files(graph_dir="data/graphs", graph_suffix=""):
     """
     List all video names (without .pkl extension) in the graph directory.
 
     Args:
         graph_dir: Directory containing graph pickle files.
+        graph_suffix: Optional suffix before .pkl, such as _preabstraction.
 
     Returns:
         list[str]: Sorted video names derived from *.pkl filenames.
@@ -127,5 +150,14 @@ def find_pkl_files(graph_dir="data/graphs"):
         return []
 
     pkl_files = sorted(graph_path.glob("*.pkl"))
-    return [f.stem for f in pkl_files]
-
+    if graph_suffix:
+        return [
+            path.stem[:-len(graph_suffix)]
+            for path in pkl_files
+            if path.stem.endswith(graph_suffix)
+        ]
+    return [
+        path.stem
+        for path in pkl_files
+        if not path.stem.endswith("_preabstraction")
+    ]

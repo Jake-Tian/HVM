@@ -1,12 +1,27 @@
+import os
 import pickle
 import json
 import glob
 import sys
 import traceback
 from pathlib import Path
-from utils.llm import generate_text_response
+
+# Keep imports working when this module is run directly from the repository
+# root or imported by an experiment script.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.llm_gpt import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
-from utils.prompts import prompt_parse_query, prompt_parse_query_k30, prompt_parse_query_no_allocation, prompt_graph_video, prompt_no_video_rewatch, prompt_video_answer, prompt_video_answer_final
+from utils.prompts import (
+    prompt_parse_query,
+    prompt_parse_query_k30,
+    prompt_parse_query_no_allocation,
+)
+from reasoning_variants.prompts import (
+    prompt_graph_video,
+    prompt_no_video_rewatch,
+    prompt_video_answer,
+    prompt_video_answer_final,
+)
 from classes.output_structure import ParseQueryOutput, ParseQueryOutputNoAllocation, GraphOutputFormat, VideoOutputFormat
 from utils.search import search_with_parse
 from utils.general import find_pkl_files, Tee
@@ -354,4 +369,3 @@ def reason_no_video_rewatch(graph, video_name, question):
         raise Exception(f"Error answering from searched graph: {e}")
 
     return result
-

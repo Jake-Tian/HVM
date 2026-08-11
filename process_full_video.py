@@ -6,11 +6,29 @@ import time
 import traceback
 from pathlib import Path
 from classes.hetero_graph import HeteroGraph
-from classes.output_structure import EpisodicFormat
-from utils.llm import generate_text_response
+from classes.output_structure import EpisodicFormat, TripleExtraction
+from utils.llm_gpt import generate_text_response
 from utils.mllm_gpt import generate_messages, get_response
 from utils.prompts import prompt_generate_episodic_memory, prompt_extract_triples
-from utils.general import Tee, strip_code_fences, load_video_list, merge_character_appearances
+from utils.general import QuietStdout, Tee, load_video_list, merge_character_appearances, verbose_terminal
+from utils.abstraction_config import AbstractionConfig
+
+
+def extract_behavior_triples(behaviors):
+    behavior_prompt = (
+        prompt_extract_triples
+        + "\n"
+        + json.dumps(behaviors, ensure_ascii=False)
+    )
+    response, tokens = generate_text_response(
+        behavior_prompt,
+        text_format=TripleExtraction,
+    )
+    triples = [
+        [triple.source, triple.content, triple.target]
+        for triple in response.triples
+    ]
+    return triples, tokens
 
 
 def process_full_video(video_name):
@@ -57,13 +75,11 @@ def process_full_video(video_name):
             messages = generate_messages(current_images, prompt)
             try:
                 response, tokens = get_response(messages, EpisodicFormat)
-                print(response)
                 token_summaries["mllm"] += int(tokens or 0)
             except Exception as e:
                 print(f"MLLM call failed, retrying... Error: {e}")
                 try: 
-                    response, tokens = get_response(messages)
-                    print(response)
+                    response, tokens = get_response(messages, EpisodicFormat)
                     token_summaries["mllm"] += int(tokens or 0)
                 except Exception as e:
                     print(f"MLLM call failed, retrying... Error: {e}")
@@ -124,69 +140,44 @@ def process_full_video(video_name):
             # Graph Construction
             #--------------------------------
             if behaviors:
-                behavior_prompt = prompt_extract_triples + "\n" + "\n".join(str(b) for b in behaviors)
                 try:
-                    triples_response, tokens = generate_text_response(behavior_prompt)
+                    triples, tokens = extract_behavior_triples(behaviors)
                     token_summaries["triples"] += int(tokens or 0)
                 except Exception as e:
                     print(f"LLM call failed, retrying... Error: {e}")
-                    triples_response, tokens = generate_text_response(behavior_prompt)
+                    triples, tokens = extract_behavior_triples(behaviors)
                     token_summaries["triples"] += int(tokens or 0)
-                triples_response = strip_code_fences(triples_response)
-                try:
-                    triples = json.loads(triples_response)
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse triples JSON for clip {clip_id}: {e}")
-                    print(f"Raw triples response: {triples_response}")
-                    triples = []
-                except Exception as e:
-                    print(f"Warning: Unexpected error while parsing triples for clip {clip_id}: {e}")
-                    print(f"Raw triples response: {triples_response}")
-                    triples = []
-
-                if not isinstance(triples, list):
-                    print(
-                        f"Warning: Triples payload is not a list for clip {clip_id} "
-                        f"(got {type(triples).__name__}), skipping triples."
-                    )
-                    triples = []
             else:
                 triples = []
-            
-            # Pass character_appearance to insert_triples for matching and merging
+
             graph.insert_triples(triples, clip_id, scene)
             print(f"Inserted {len(triples)} triples into graph for clip {clip_id}")
 
-            equivalence_list = merge_character_appearances(characters_appearance, appearance_dict)
-            if equivalence_list:
-                for equivalence in equivalence_list:
-                    graph.rename_character(equivalence[0], equivalence[1])
-
-            # Store episodic memory for this clip
+            # Update episodic memory
             episodic_memory[clip_id] = {
-                "folder": folder,
-                "characters_behavior": behaviors,
+                "behaviors": behaviors,
                 "conversation": conversation,
-                "characters_appearance": str(characters_appearance),
                 "scene": scene,
-                "ocr": [ocr_item.model_dump() for ocr_item in ocr] if ocr else [],
-                "triples": triples
+                "ocr": [o.model_dump() if hasattr(o, "model_dump") else o for o in ocr],
+                "triples": triples,
             }
 
-        # Extract summary for any remaining active conversation at the end
+            # Update appearance dictionary
+            equivalence_list = merge_character_appearances(characters_appearance, appearance_dict)
+            for old_name, new_name in equivalence_list:
+                graph.rename_character(old_name, new_name)
+
+        # Final cleanup for last conversation if it exists
         if previous_conversation and graph.current_conversation_id is not None:
             try:
-                print(f"Extracting summary for final conversation {graph.current_conversation_id}...")
-                result, tokens = graph.extract_conversation_summary(graph.current_conversation_id)
-                token_summaries["conversation"] += int(tokens or 0)
-                print(f"✓ Final conversation summary extracted. Attributes: {len(result['character_attributes'])}, Relationships: {len(result['characters_relationships'])}")
+                print(f"Extracting final conversation summary for {graph.current_conversation_id}...")
+                graph.extract_conversation_summary(graph.current_conversation_id)
             except Exception as e:
-                print(f"✗ Error extracting final conversation summary: {e}")
-                traceback.print_exc()
+                print(f"✗ Final conversation summary failed: {e}")
 
-        # Insert character appearances
-        print("Inserting character appearances...")
-        print("Number of edges: ", len(graph.edges))
+        # Finalize graph state before abstraction.
+        print("\n--- Finalizing Graph ---")
+
         try:
             appearance_text_dict = {name: value[0] for name, value in appearance_dict.items()}
             graph.insert_character_appearances(appearance_text_dict)
@@ -194,46 +185,41 @@ def process_full_video(video_name):
             print(f"✗ Error inserting character appearances: {e}")
             traceback.print_exc()
 
-        # --------------------------------
-        # Abstract Memory
-        # --------------------------------
-        # Generate character attributes
-        print("Generating character attributes...")
-        print("Number of edges: ", len(graph.edges))
-        degrees = graph.get_node_degrees()
-        # Select all characters whose degree is greater than 10
-        characters = [character for character in graph.characters if degrees.get(character, 0) > 10]
-
-        for character in characters:
-            try: 
-                tokens = graph.character_attributes(character)
-                token_summaries["attributes"] += int(tokens or 0)
-            except Exception as e:
-                print(f"✗ Error generating character attributes for {character}: {e}")
-                traceback.print_exc()
-                print("Continuing to next character...")
-                continue
-        print("Character attributes generated.")
-        print("Number of edges: ", len(graph.edges))
-
-        # Generate character relationships
-        for i in range(len(characters)-1):
-            for j in range(i+1, len(characters)):
-                try:
-                    tokens = graph.character_relationships(characters[i], characters[j])
-                    token_summaries["relationships"] += int(tokens or 0)
-                except Exception as e:
-                    print(f"✗ Error generating character relationships for {characters[i]} and {characters[j]}: {e}")
-                    traceback.print_exc()
-                    print("Continuing to next character pair...")
-                    continue
-        print("Character relationships generated.")
-        print("Number of edges: ", len(graph.edges))
-
-        try: 
+        try:
             graph.node_embedding_insertion()
-            graph.insert_high_level_and_appearance_embeddings()
+        except Exception as e:
+            print(f"✗ Error inserting node embeddings: {e}")
+            traceback.print_exc()
+
+        # OCR retrieval is shared by every abstraction variant, so embed it
+        # before saving the reusable pre-abstraction checkpoint.
+        try:
             graph.ocr_embedding_insertion()
+        except Exception as e:
+            print(f"✗ Error inserting OCR embeddings: {e}")
+            traceback.print_exc()
+
+        try:
+            checkpoint_path = Path(f"data/graphs/{video_name}_preabstraction.pkl")
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(checkpoint_path, "wb") as f:
+                pickle.dump(graph, f)
+            print(f"✓ Saved pre-abstraction checkpoint to {checkpoint_path}")
+        except Exception as e:
+            print(f"✗ Error saving pre-abstraction checkpoint: {e}")
+            traceback.print_exc()
+
+        print("Running threshold-based abstraction...")
+        try:
+            abstraction_tokens = graph.run_abstraction(AbstractionConfig())
+            token_summaries["attributes"] += int(abstraction_tokens.get("attributes_tokens", 0) or 0)
+            token_summaries["relationships"] += int(abstraction_tokens.get("relationships_tokens", 0) or 0)
+        except Exception as e:
+            print(f"✗ Error during run_abstraction: {e}")
+            traceback.print_exc()
+
+        try:
+            graph.insert_high_level_and_appearance_embeddings()
         except Exception as e:
             print(f"✗ Error inserting embeddings: {e}")
             traceback.print_exc()
@@ -260,33 +246,35 @@ def process_full_video(video_name):
 def main():
     # Example usage: python process_full_video.py meeting_room_03
 
-    original_stdout = sys.stdout
-    log_file = open("log.txt", "w", encoding="utf-8")
-    sys.stdout = Tee(log_file)
-    
     if len(sys.argv) < 2: # If no video names are provided, process all videos
         video_names = load_video_list()
     else:
         video_names = sys.argv[1:]
 
+    real_stdout = sys.stdout
+    Path("data/logs").mkdir(parents=True, exist_ok=True)
     for video_name in video_names:
+        log_path = Path("data/logs") / f"{video_name}_memo.log"
+        log_file = open(log_path, "w", encoding="utf-8")
+        sys.stdout = Tee(log_file) if verbose_terminal() else QuietStdout(log_file)
+        start_time = time.time()
         try:
-            start_time = time.time()
             print(f"\nProcessing {video_name}...")
             graph, episodic_memory, token_summaries = process_full_video(video_name)
-            print(f"✓ {video_name} complete. Graph has {len(graph.characters)} characters and {len(graph.edges)} edges.")
-            print(f"Token summaries: {token_summaries}")
-            end_time = time.time()
-            print(f"Time taken: {end_time - start_time} seconds")
         except Exception as e:
-            print(f"✗ Error processing video {video_name}: {e}")
+            sys.stdout = real_stdout
+            log_file.close()
+            print(f"✗ [{video_name}] memo failed after {time.time() - start_time:.0f}s: {e}")
             traceback.print_exc()
-            print("Continuing to next video...")
             continue
-    
-    sys.stdout = original_stdout
-    log_file.close()
+
+        sys.stdout = real_stdout
+        log_file.close()
+        print(
+            f"✓ [{video_name}] memo {time.time() - start_time:.0f}s | "
+            f"clips={len(episodic_memory)} edges={len(graph.edges)} "
+            f"chars={len(graph.characters)} | log={log_path}"
+        )
 
 if __name__ == "__main__":
     main()
-

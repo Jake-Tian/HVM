@@ -172,7 +172,7 @@ def search_with_parse(query, graph, parse_query_response):
 
 if __name__ == "__main__":
     # Example usage
-    from utils.llm import generate_text_response
+    from utils.llm_gpt import generate_text_response
     from utils.prompts import prompt_parse_query
     
     with open("data/semantic_memory/gym_01.pkl", "rb") as f:

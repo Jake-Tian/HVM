@@ -12,6 +12,7 @@ from huggingface_hub import snapshot_download
 # Configuration
 REPO_ID = "JakeTian/M3-web"
 LOCAL_DIR = Path("data/frames")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 def download_frames(video_id):
     """
@@ -42,8 +43,9 @@ def download_frames(video_id):
             repo_id=REPO_ID,
             repo_type="dataset",
             allow_patterns=f"{video_id}/**",
-            local_dir=str(LOCAL_DIR.parent), # Download to data/ so it creates data/frames/video_id/
+            local_dir=str(LOCAL_DIR),
             local_dir_use_symlinks=False,
+            token=HF_TOKEN,
         )
         
         # Verify download
@@ -58,41 +60,19 @@ def download_frames(video_id):
         print(f"✗ Error downloading frames for {video_id}: {e}")
         return False
 
-
 def main():
-    """Main function to download frames from command line arguments."""
     if len(sys.argv) < 2:
         print("Usage: python download_hf_frames.py <video_id1> [video_id2] ...")
         sys.exit(1)
     
     video_ids = sys.argv[1:]
-    print(f"Downloading frames for {len(video_ids)} video(s) to {LOCAL_DIR}...")
-    print()
     
     success_count = 0
-    failed_videos = []
-    
     for video_id in video_ids:
-        # Remove .mp4 extension if provided
-        video_id = video_id.replace('.mp4', '')
-        
         if download_frames(video_id):
             success_count += 1
-        else:
-            failed_videos.append(video_id)
-        print()
-    
-    # Summary
-    print("=" * 60)
-    print(f"Frame Download Summary:")
-    print(f"  Successful: {success_count}/{len(video_ids)}")
-    if failed_videos:
-        print(f"  Failed: {', '.join(failed_videos)}")
-    print("=" * 60)
-    
-    if success_count == 0:
-        sys.exit(1)
-
+            
+    print(f"\nSummary: Successfully downloaded {success_count}/{len(video_ids)} video frame sets.")
 
 if __name__ == "__main__":
     main()
