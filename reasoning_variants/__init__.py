@@ -1,1 +1,1 @@
-"""Isolated reasoning variants used for controlled HVM comparisons."""
+"""Isolated reasoning variants used for controlled CAM comparisons."""

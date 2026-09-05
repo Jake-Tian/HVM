@@ -1,8 +1,8 @@
-"""LangGraph agent tools for HVM reasoning.
+"""LangGraph agent tools for CAM reasoning.
 
 Tools exposed to the planner/executor agent:
   - general_search          : semantic retrieval over the heterogeneous graph
-                               (reuses HVM's existing parse_query + search logic)
+                               (reuses CAM's existing parse_query + search logic)
   - search_temporal_context : graph actions/conversations around a clip_id
   - search_action_evidence  : frequency-only raw episodic behavior around a clip
   - search_object_events    : deterministic object location timeline

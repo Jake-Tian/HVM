@@ -1,4 +1,4 @@
-"""Run the default five-tool HVM reasoning agent and evaluate its answers.
+"""Run the default five-tool CAM reasoning agent and evaluate its answers.
 
 Alternative implementations live under ``reasoning_variants`` and are not part
 of the default CLI path. ``reason_pipeline`` is re-exported below for backward
@@ -22,7 +22,6 @@ from utils.prompts import (
 )
 from reasoning.agent import build_agent, DEFAULT_BUDGET
 from reasoning_variants.fixed_pipeline_backup import reason_pipeline
-from utils.api_errors import is_fatal_api_error
 from utils.reasoning_trace import build_tool_rounds
 from utils.general import find_pkl_files, Tee, QuietStdout, verbose_terminal
 
@@ -108,9 +107,6 @@ def evaluate_answer(question, ground_truth_answer, predicted_answer):
             print(f"Warning: Unexpected evaluator response: {response}. Defaulting to False.")
             return False
     except Exception as e:
-        # Re-raise unrecoverable API failures instead of scoring them as wrong.
-        if is_fatal_api_error(e):
-            raise
         print(f"Error evaluating answer: {e}. Defaulting to False.")
         return False
 
@@ -135,7 +131,7 @@ def load_incorrect_question_ids(result_path):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="HVM reasoning over a graph memory.")
+    parser = argparse.ArgumentParser(description="CAM reasoning over a graph memory.")
     parser.add_argument("videos", nargs="*", help="Video names to process. If omitted, process all *.pkl in --graph-dir.")
     parser.add_argument("--graph-dir", default="data/graphs",
                         help="Directory to read <video>.pkl from (default: data/graphs). "
@@ -236,22 +232,6 @@ def main():
                 print(f"Error processing question {question_id}: {e}")
                 traceback.print_exc()
                 main_result = str(e)
-
-                # Save progress and report to the terminal before aborting.
-                if is_fatal_api_error(e):
-                    with open(output_json_path, "w", encoding="utf-8") as f:
-                        json.dump(reasoning_results, f, indent=2, ensure_ascii=False)
-                    pbar.close()
-                    sys.stdout = real_stdout
-                    log_file.close()
-                    msg = (
-                        f"\n✗ Fatal API error at {video_name}/{question_id}: {e}\n"
-                        f"Partial results saved to {output_json_path}.\n"
-                    )
-                    print(msg)
-                    sys.stderr.write(msg)
-                    sys.stderr.flush()
-                    sys.exit(1)
 
             reasoning_results[question_id] = {
                 "question": question,

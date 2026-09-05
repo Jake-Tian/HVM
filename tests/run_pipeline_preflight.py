@@ -148,7 +148,7 @@ def check_opencv(context):
 
     frame = np.zeros((240, 320, 3), dtype=np.uint8)
     frame[:, :] = (30, 30, 180)
-    rendered = draw_subtitle_on_frame(frame, "HVM preflight")
+    rendered = draw_subtitle_on_frame(frame, "CAM preflight")
     image_path = context["temp_dir"] / "opencv_test.jpg"
     if not cv2.imwrite(str(image_path), rendered):
         raise RuntimeError("cv2.imwrite failed")
@@ -217,7 +217,7 @@ def check_embedding(context):
     from utils.embedding import get_multiple_embeddings
 
     embeddings = get_multiple_embeddings(
-        ["HVM pipeline preflight one", "HVM pipeline preflight two"]
+        ["CAM pipeline preflight one", "CAM pipeline preflight two"]
     )
     if len(embeddings) != 2 or not embeddings[0]:
         raise RuntimeError("embedding response has the wrong shape")
@@ -285,10 +285,10 @@ def main():
     ]
     failures = []
 
-    print("HVM pipeline preflight")
+    print("CAM pipeline preflight")
     print("This makes 1 embedding, 1 text-LLM, and 1 multimodal-LLM request.\n")
 
-    with tempfile.TemporaryDirectory(prefix="hvm_pipeline_preflight_") as temp:
+    with tempfile.TemporaryDirectory(prefix="cam_pipeline_preflight_") as temp:
         context = {"temp_dir": Path(temp), "warnings": []}
         for name, check in checks:
             try:

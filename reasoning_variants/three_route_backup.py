@@ -1,4 +1,4 @@
-"""HVM reasoning entry point.
+"""CAM reasoning entry point.
 
 The default `reason()` now uses a LangGraph planner/executor/verifier/final_answer
 agent (reasoning_variants/three_route/agent.py) with graph search,
@@ -334,7 +334,7 @@ def load_incorrect_question_ids(result_path):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="HVM reasoning over a graph memory.")
+    parser = argparse.ArgumentParser(description="CAM reasoning over a graph memory.")
     parser.add_argument("videos", nargs="*", help="Video names to process. If omitted, process all *.pkl in --graph-dir.")
     parser.add_argument("--graph-dir", default="data/graphs",
                         help="Directory to read <video>.pkl from (default: data/graphs). "

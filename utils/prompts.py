@@ -1040,7 +1040,7 @@ Output ('Yes' or 'No'):"""
 
 # ----------------------------------------------------------------------------
 # LangGraph agent prompts (planner / executor / verifier / final_answer)
-# Adapted from HVM-web for HVM's robot entity-centric, open-ended QA setting.
+# Adapted from HVM-web for CAM's robot entity-centric, open-ended QA setting.
 # ----------------------------------------------------------------------------
 
 prompt_planner_system = """You are a strategic Planner answering questions about a long entity-centric video. You have access to tools that search the video's heterogeneous memory graph. Raw clip rewatch is available only for location questions. You have {budget} turns left to gather evidence. Think step-by-step: analyze what you know, what is missing, and which tool is best to fill the gap. Then, call EXACTLY ONE tool to gather missing information. Once you have sufficient evidence to confidently answer the user's question, call complete_task.

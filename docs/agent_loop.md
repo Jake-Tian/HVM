@@ -1,6 +1,6 @@
-# HVM Agent Loop 设计与实现
+# CAM Agent Loop 设计与实现
 
-本文档描述当前 HVM reasoning agent 的执行流程、问题路由、工具行为和 Location / Action Frequency 专项策略。对应实现位于：
+本文档描述当前 CAM reasoning agent 的执行流程、问题路由、工具行为和 Location / Action Frequency 专项策略。对应实现位于：
 
 - `reason.py`
 - `reasoning_variants/three_route/agent.py`

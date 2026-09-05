@@ -1,4 +1,4 @@
-"""LangGraph planner/executor/verifier/final_answer agent for HVM.
+"""LangGraph planner/executor/verifier/final_answer agent for CAM.
 
 Architecture (synthesized from HVM-web / HVM-Hippo / HVM-Ego):
 
@@ -15,9 +15,9 @@ Architecture (synthesized from HVM-web / HVM-Hippo / HVM-Ego):
     not used search_temporal_context.
   - A lightweight question router selects isolated location/action-frequency
     strategies; general questions retain the default strategy.
-  - final_answer is a separate free-text LLM call (HVM is open-ended QA, not MCQ).
+  - final_answer is a separate free-text LLM call (CAM is open-ended QA, not MCQ).
 
-The model is GPT-5 mini, matching the reasoning adapters used by the HVM pipeline.
+The model is GPT-5 mini, matching the reasoning adapters used by the CAM pipeline.
 """
 
 import operator

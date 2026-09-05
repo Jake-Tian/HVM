@@ -1,6 +1,6 @@
-# Hierarchical Video Memory
+# CAM: Continuous and Adaptive Memory
 
-Pipeline for building graph memory from videos and answering QA with graph + video reasoning.
+Pipeline for building continuous and adaptive graph memory from videos and answering QA with graph + video reasoning.
 
 ## Quick Start
 

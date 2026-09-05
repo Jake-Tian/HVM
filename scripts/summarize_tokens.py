@@ -1,4 +1,4 @@
-"""Summarize HVM LLM/MLLM token usage and optionally estimate API cost.
+"""Summarize CAM LLM/MLLM token usage and optionally estimate API cost.
 
 Embedding calls are intentionally excluded from this report.
 """

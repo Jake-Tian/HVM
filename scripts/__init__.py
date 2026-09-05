@@ -1,1 +1,1 @@
-"""HVM experiment and analysis scripts."""
+"""CAM experiment and analysis scripts."""
